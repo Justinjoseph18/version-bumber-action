@@ -1,3 +1,4 @@
+# action.yml
 name: 'Automatic Version Bumper'
 description: 'Automatically bumps version and creates releases based on PR title conventions'
 inputs:
@@ -13,7 +14,7 @@ inputs:
     description: 'Mark as prerelease'
     required: false
     default: 'false'
-
+ 
 runs:
   using: 'composite'
   steps:
@@ -26,7 +27,7 @@ runs:
           echo "PACKAGE_VERSION=v${VERSION}" >> $GITHUB_ENV
         fi
       continue-on-error: true
-
+ 
     - name: Get version from .version file
       shell: bash
       id: version-file
@@ -36,7 +37,7 @@ runs:
           echo "FILE_VERSION=v${VERSION}" >> $GITHUB_ENV
         fi
       continue-on-error: true
-
+ 
     - name: Get latest tag
       shell: bash
       id: get-latest-tag
@@ -53,17 +54,7 @@ runs:
         else
           echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
         fi
-
-    - name: Debug Current Location
-      shell: bash
-      run: |
-        echo "Current directory:"
-        pwd
-        echo "Files in directory:"
-        ls -la
-        echo "Content of releasenote.md (if exists):"
-        cat releasenote.md || echo "releasenote.md not found"
-
+ 
     - name: Determine version bump
       shell: bash
       id: version-bump
@@ -84,7 +75,7 @@ runs:
         # Debug output
         echo "PR Title: $PR_TITLE"
         echo "Bump Type: $BUMP"
-
+ 
     - name: Bump version
       if: env.BUMP != 'none'
       shell: bash
@@ -105,93 +96,16 @@ runs:
         esac
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
         echo "New version: v$NEW_VERSION"
-
-    - name: Extract release notes
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      shell: bash
-      id: release-notes
-      run: |
-        echo "Attempting to extract release notes for version v$NEW_VERSION"
-        if [ -f releasenote.md ]; then
-          echo "Found releasenote.md file"
-          # Create a temporary file
-          TEMP_FILE=$(mktemp)
-          
-          # Extract notes for the specific version
-          VERSION_PATTERN="# v$NEW_VERSION"
-          FOUND_VERSION=false
-          CAPTURE=false
-          
-          while IFS= read -r line || [ -n "$line" ]; do
-            if [[ $line == $VERSION_PATTERN ]]; then
-              FOUND_VERSION=true
-              CAPTURE=true
-              continue
-            elif [[ $line =~ ^#[[:space:]]*v[0-9]+\.[0-9]+\.[0-9]+ ]] && [ "$CAPTURE" = true ]; then
-              CAPTURE=false
-            fi
-            
-            if [ "$CAPTURE" = true ]; then
-              echo "$line" >> "$TEMP_FILE"
-            fi
-          done < releasenote.md
-          
-          if [ "$FOUND_VERSION" = true ]; then
-            # Format release notes with proper line endings
-            {
-              echo "RELEASE_NOTES<<EOF"
-              echo "Release v$NEW_VERSION"
-              echo ""
-              echo "Changes in this Release:"
-              echo "- PR: #${{ github.event.pull_request.number }}"
-              echo "- Title: ${{ github.event.pull_request.title }}"
-              echo ""
-              echo "Release Notes:"
-              cat "$TEMP_FILE" | sed '/^$/N;/^\n$/D'
-              echo "EOF"
-            } >> $GITHUB_ENV
-            echo "Successfully extracted release notes"
-          else
-            echo "Warning: Version v$NEW_VERSION not found in releasenote.md"
-            {
-              echo "RELEASE_NOTES<<EOF"
-              echo "Release v$NEW_VERSION"
-              echo ""
-              echo "Changes in this Release:"
-              echo "- PR: #${{ github.event.pull_request.number }}"
-              echo "- Title: ${{ github.event.pull_request.title }}"
-              echo "EOF"
-            } >> $GITHUB_ENV
-          fi
-          rm "$TEMP_FILE"
-        else
-          echo "Warning: releasenote.md file not found"
-          {
-            echo "RELEASE_NOTES<<EOF"
-            echo "Release v$NEW_VERSION"
-            echo ""
-            echo "Changes in this Release:"
-            echo "- PR: #${{ github.event.pull_request.number }}"
-            echo "- Title: ${{ github.event.pull_request.title }}"
-            echo "EOF"
-          } >> $GITHUB_ENV
-        fi
-        
-        # Debug output
-        echo "Release Notes Content:"
-        echo "$RELEASE_NOTES"
-
+ 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       run: |
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
-        echo "Creating tag with message:"
-        echo "$RELEASE_NOTES"
-        git tag -a "v$NEW_VERSION" -m "$RELEASE_NOTES"
+        git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
         git push origin "v$NEW_VERSION"
-
+ 
     - name: Create Release
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       uses: actions/create-release@v1
@@ -200,138 +114,9 @@ runs:
       with:
         tag_name: v${{ env.NEW_VERSION }}
         release_name: Release v${{ env.NEW_VERSION }}
-        body: ${{ env.RELEASE_NOTES }}
+        body: |
+          Changes in this Release
+          - PR: #${{ github.event.pull_request.number }}
+          - Title: ${{ github.event.pull_request.title }}
         draft: ${{ inputs.draft }}
         prerelease: ${{ inputs.prerelease }}
-
-
-
-
-
-
-
-
-
-
-# # action.yml
-# name: 'Automatic Version Bumper'
-# description: 'Automatically bumps version and creates releases based on PR title conventions'
-# inputs:
-#   token:
-#     description: 'GitHub token for creating releases'
-#     required: true
-#     default: ${{ github.token }}
-#   draft:
-#     description: 'Create release as draft'
-#     required: false
-#     default: 'false'
-#   prerelease:
-#     description: 'Mark as prerelease'
-#     required: false
-#     default: 'false'
- 
-# runs:
-#   using: 'composite'
-#   steps:
-#     - name: Get version from package.json
-#       shell: bash
-#       id: package-version
-#       run: |
-#         if [ -f package.json ]; then
-#           VERSION=$(node -p "require('./package.json').version")
-#           echo "PACKAGE_VERSION=v${VERSION}" >> $GITHUB_ENV
-#         fi
-#       continue-on-error: true
- 
-#     - name: Get version from .version file
-#       shell: bash
-#       id: version-file
-#       run: |
-#         if [ -f .version ]; then
-#           VERSION=$(cat .version)
-#           echo "FILE_VERSION=v${VERSION}" >> $GITHUB_ENV
-#         fi
-#       continue-on-error: true
- 
-#     - name: Get latest tag
-#       shell: bash
-#       id: get-latest-tag
-#       run: |
-#         git fetch --tags
-#         LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-#         # Priority order: git tag > package.json > .version file > default
-#         if [ ! -z "$LATEST_TAG" ]; then
-#           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-#         elif [ ! -z "$PACKAGE_VERSION" ]; then
-#           echo "LATEST_TAG=$PACKAGE_VERSION" >> $GITHUB_ENV
-#         elif [ ! -z "$FILE_VERSION" ]; then
-#           echo "LATEST_TAG=$FILE_VERSION" >> $GITHUB_ENV
-#         else
-#           echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
-#         fi
- 
-#     - name: Determine version bump
-#       shell: bash
-#       id: version-bump
-#       run: |
-#         PR_TITLE="${{ github.event.pull_request.title }}"
-#         # First check for breaking changes
-#         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
-#           echo "BUMP=major" >> $GITHUB_ENV
-#         # Then check for features
-#         elif [[ $PR_TITLE =~ ^feat: ]]; then
-#           echo "BUMP=minor" >> $GITHUB_ENV
-#         # Then check for fixes
-#         elif [[ $PR_TITLE =~ ^fix: ]]; then
-#           echo "BUMP=patch" >> $GITHUB_ENV
-#         else
-#           echo "BUMP=none" >> $GITHUB_ENV
-#         fi
-#         # Debug output
-#         echo "PR Title: $PR_TITLE"
-#         echo "Bump Type: $BUMP"
- 
-#     - name: Bump version
-#       if: env.BUMP != 'none'
-#       shell: bash
-#       id: bump-version
-#       run: |
-#         CURRENT_VERSION=${LATEST_TAG#v}
-#         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-#         case $BUMP in
-#           major)
-#             NEW_VERSION="$((MAJOR + 1)).0.0"
-#             ;;
-#           minor)
-#             NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-#             ;;
-#           patch)
-#             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-#             ;;
-#         esac
-#         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-#         echo "New version: v$NEW_VERSION"
- 
-#     - name: Create and push tag
-#       if: env.BUMP != 'none' && env.NEW_VERSION != ''
-#       shell: bash
-#       run: |
-#         git config user.name "GitHub Actions"
-#         git config user.email "actions@github.com"
-#         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-#         git push origin "v$NEW_VERSION"
- 
-#     - name: Create Release
-#       if: env.BUMP != 'none' && env.NEW_VERSION != ''
-#       uses: actions/create-release@v1
-#       env:
-#         GITHUB_TOKEN: ${{ inputs.token }}
-#       with:
-#         tag_name: v${{ env.NEW_VERSION }}
-#         release_name: Release v${{ env.NEW_VERSION }}
-#         body: |
-#           Changes in this Release
-#           - PR: #${{ github.event.pull_request.number }}
-#           - Title: ${{ github.event.pull_request.title }}
-#         draft: ${{ inputs.draft }}
-#         prerelease: ${{ inputs.prerelease }}
