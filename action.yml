@@ -54,6 +54,16 @@ runs:
           echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
         fi
 
+    - name: Debug Current Location
+      shell: bash
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Files in directory:"
+        ls -la
+        echo "Content of releasenote.md (if exists):"
+        cat releasenote.md || echo "releasenote.md not found"
+
     - name: Determine version bump
       shell: bash
       id: version-bump
@@ -101,47 +111,75 @@ runs:
       shell: bash
       id: release-notes
       run: |
+        echo "Attempting to extract release notes for version v$NEW_VERSION"
         if [ -f releasenote.md ]; then
-          # Create a temporary file to store the release notes
-          TEMP_NOTES=$(mktemp)
+          echo "Found releasenote.md file"
+          # Create a temporary file
+          TEMP_FILE=$(mktemp)
           
-          # Extract notes for the new version
-          awk -v ver="v$NEW_VERSION" '
-            $0 ~ "^#+ *" ver {
-              flag=1;
-              next
-            }
-            flag && /^#+ *v[0-9]+\.[0-9]+\.[0-9]+/ {
-              flag=0
-            }
-            flag {
-              print
-            }
-          ' releasenote.md > "$TEMP_NOTES"
+          # Extract notes for the specific version
+          VERSION_PATTERN="# v$NEW_VERSION"
+          FOUND_VERSION=false
+          CAPTURE=false
           
-          # Remove leading/trailing whitespace and empty lines
-          RELEASE_NOTES=$(cat "$TEMP_NOTES" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' || echo "No release notes found for version v$NEW_VERSION")
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [[ $line == $VERSION_PATTERN ]]; then
+              FOUND_VERSION=true
+              CAPTURE=true
+              continue
+            elif [[ $line =~ ^#[[:space:]]*v[0-9]+\.[0-9]+\.[0-9]+ ]] && [ "$CAPTURE" = true ]; then
+              CAPTURE=false
+            fi
+            
+            if [ "$CAPTURE" = true ]; then
+              echo "$line" >> "$TEMP_FILE"
+            fi
+          done < releasenote.md
           
-          # Create a properly formatted release notes string for GITHUB_ENV
+          if [ "$FOUND_VERSION" = true ]; then
+            # Format release notes with proper line endings
+            {
+              echo "RELEASE_NOTES<<EOF"
+              echo "Release v$NEW_VERSION"
+              echo ""
+              echo "Changes in this Release:"
+              echo "- PR: #${{ github.event.pull_request.number }}"
+              echo "- Title: ${{ github.event.pull_request.title }}"
+              echo ""
+              echo "Release Notes:"
+              cat "$TEMP_FILE" | sed '/^$/N;/^\n$/D'
+              echo "EOF"
+            } >> $GITHUB_ENV
+            echo "Successfully extracted release notes"
+          else
+            echo "Warning: Version v$NEW_VERSION not found in releasenote.md"
+            {
+              echo "RELEASE_NOTES<<EOF"
+              echo "Release v$NEW_VERSION"
+              echo ""
+              echo "Changes in this Release:"
+              echo "- PR: #${{ github.event.pull_request.number }}"
+              echo "- Title: ${{ github.event.pull_request.title }}"
+              echo "EOF"
+            } >> $GITHUB_ENV
+          fi
+          rm "$TEMP_FILE"
+        else
+          echo "Warning: releasenote.md file not found"
           {
-            echo 'RELEASE_NOTES<<EOF'
-            echo "Changes in this Release"
+            echo "RELEASE_NOTES<<EOF"
+            echo "Release v$NEW_VERSION"
+            echo ""
+            echo "Changes in this Release:"
             echo "- PR: #${{ github.event.pull_request.number }}"
             echo "- Title: ${{ github.event.pull_request.title }}"
-            echo ""
-            echo "Release Notes:"
-            echo "$RELEASE_NOTES"
-            echo 'EOF'
+            echo "EOF"
           } >> $GITHUB_ENV
-          
-          rm "$TEMP_NOTES"
-        else
-          echo 'RELEASE_NOTES<<EOF' >> $GITHUB_ENV
-          echo "Changes in this Release" >> $GITHUB_ENV
-          echo "- PR: #${{ github.event.pull_request.number }}" >> $GITHUB_ENV
-          echo "- Title: ${{ github.event.pull_request.title }}" >> $GITHUB_ENV
-          echo 'EOF' >> $GITHUB_ENV
         fi
+        
+        # Debug output
+        echo "Release Notes Content:"
+        echo "$RELEASE_NOTES"
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -149,6 +187,8 @@ runs:
       run: |
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
+        echo "Creating tag with message:"
+        echo "$RELEASE_NOTES"
         git tag -a "v$NEW_VERSION" -m "$RELEASE_NOTES"
         git push origin "v$NEW_VERSION"
 
@@ -163,7 +203,6 @@ runs:
         body: ${{ env.RELEASE_NOTES }}
         draft: ${{ inputs.draft }}
         prerelease: ${{ inputs.prerelease }}
-
 
 
 
