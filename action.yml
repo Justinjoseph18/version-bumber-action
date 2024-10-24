@@ -1,4 +1,3 @@
-# action.yml
 name: 'Automatic Version Bumper'
 description: 'Automatically bumps version and creates releases based on PR title conventions'
 inputs:
@@ -14,7 +13,7 @@ inputs:
     description: 'Mark as prerelease'
     required: false
     default: 'false'
- 
+
 runs:
   using: 'composite'
   steps:
@@ -27,7 +26,7 @@ runs:
           echo "PACKAGE_VERSION=v${VERSION}" >> $GITHUB_ENV
         fi
       continue-on-error: true
- 
+
     - name: Get version from .version file
       shell: bash
       id: version-file
@@ -37,7 +36,7 @@ runs:
           echo "FILE_VERSION=v${VERSION}" >> $GITHUB_ENV
         fi
       continue-on-error: true
- 
+
     - name: Get latest tag
       shell: bash
       id: get-latest-tag
@@ -54,7 +53,7 @@ runs:
         else
           echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
         fi
- 
+
     - name: Determine version bump
       shell: bash
       id: version-bump
@@ -75,7 +74,7 @@ runs:
         # Debug output
         echo "PR Title: $PR_TITLE"
         echo "Bump Type: $BUMP"
- 
+
     - name: Bump version
       if: env.BUMP != 'none'
       shell: bash
@@ -96,7 +95,8 @@ runs:
         esac
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
         echo "New version: v$NEW_VERSION"
- 
+        echo "::set-output name=bumped_tag::v$NEW_VERSION"  # Set output variable
+
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
@@ -105,7 +105,7 @@ runs:
         git config user.email "actions@github.com"
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
         git push origin "v$NEW_VERSION"
- 
+
     - name: Create Release
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       uses: actions/create-release@v1
