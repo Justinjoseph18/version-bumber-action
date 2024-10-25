@@ -23,9 +23,12 @@ runs:
         if [ -f package.json ]; then
           VERSION=$(node -p "require('./package.json').version")
           echo "PACKAGE_VERSION=v${VERSION}" >> $GITHUB_ENV
+          echo "Found version in package.json: v${VERSION}"
+        else
+          echo "package.json not found."
         fi
       continue-on-error: true
- 
+
     - name: Get version from .version file
       shell: bash
       id: version-file
@@ -33,9 +36,12 @@ runs:
         if [ -f .version ]; then
           VERSION=$(cat .version)
           echo "FILE_VERSION=v${VERSION}" >> $GITHUB_ENV
+          echo "Found version in .version: v${VERSION}"
+        else
+          echo ".version file not found."
         fi
       continue-on-error: true
- 
+
     - name: Get latest tag
       shell: bash
       id: get-latest-tag
@@ -52,12 +58,13 @@ runs:
           echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
         fi
         echo "Current version: $LATEST_TAG"
- 
+
     - name: Determine version bump
       shell: bash
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
+        echo "PR Title: $PR_TITLE"
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
           echo "BUMP=major" >> $GITHUB_ENV
         elif [[ $PR_TITLE =~ ^feat: ]]; then
@@ -67,9 +74,8 @@ runs:
         else
           echo "BUMP=none" >> $GITHUB_ENV
         fi
-        echo "PR Title: $PR_TITLE"
         echo "Bump Type: $BUMP"
- 
+
     - name: Bump version
       if: env.BUMP != 'none'
       shell: bash
@@ -90,7 +96,7 @@ runs:
         esac
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
         echo "New version: v$NEW_VERSION"
- 
+
     - name: Extract release notes
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
@@ -99,16 +105,17 @@ runs:
         if [ -f CHANGELOG.md ]; then
           TEMP_FILE="release_notes.txt"
           echo "Searching for version: ${NEW_VERSION}"
-          # Add debug output
+
           echo "CHANGELOG.md contents:"
           cat CHANGELOG.md
-          # Try different version formats
+
           PATTERNS=(
             "## [${NEW_VERSION}]"
             "## [v${NEW_VERSION}]"
             "## ${NEW_VERSION}"
             "## v${NEW_VERSION}"
           )
+
           START_LINE=""
           for pattern in "${PATTERNS[@]}"; do
             echo "Trying pattern: $pattern"
@@ -118,10 +125,11 @@ runs:
               break
             fi
           done
+
           if [ ! -z "$START_LINE" ]; then
             echo "Found version section at line $START_LINE"
-            # Find the next version section or end of file
             NEXT_LINE=$(tail -n +$((START_LINE + 1)) CHANGELOG.md | grep -n "^## " | head -n 1 | cut -d: -f1 || echo "")
+            
             if [ ! -z "$NEXT_LINE" ]; then
               END_LINE=$((START_LINE + NEXT_LINE - 1))
               echo "Extracting lines $START_LINE to $END_LINE"
@@ -130,6 +138,10 @@ runs:
               echo "Extracting from line $START_LINE to end of file"
               tail -n +${START_LINE} CHANGELOG.md > "$TEMP_FILE"
             fi
+
+            echo "Filtering notes for relevant prefixes"
+            grep -E "^(feat!|fix:|docs:|style:|refactor:|perf:|test:|chore:)" "$TEMP_FILE" > "$TEMP_FILE"
+
             echo "Extracted release notes:"
             cat "$TEMP_FILE"
           else
@@ -146,14 +158,14 @@ runs:
               fi
             } > "$TEMP_FILE"
           fi
-          # Ensure file is not empty
+
           if [ ! -s "$TEMP_FILE" ]; then
             echo "## Release v${NEW_VERSION}" > "$TEMP_FILE"
             echo "" >> "$TEMP_FILE"
             echo "### Changes" >> "$TEMP_FILE"
             echo "- Automated version bump" >> "$TEMP_FILE"
           fi
-          # Debug output
+
           echo "Final release notes content:"
           cat "$TEMP_FILE"
           echo "RELEASE_NOTES_PATH=${TEMP_FILE}" >> $GITHUB_ENV
@@ -172,7 +184,7 @@ runs:
           } > "release_notes.txt"
           echo "RELEASE_NOTES_PATH=release_notes.txt" >> $GITHUB_ENV
         fi
- 
+
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
@@ -181,15 +193,4 @@ runs:
         git config user.email "actions@github.com"
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
         git push origin "v$NEW_VERSION"
- 
-    - name: Create Release
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ inputs.token }}
-      with:
-        tag_name: v${{ env.NEW_VERSION }}
-        release_name: Release v${{ env.NEW_VERSION }}
-        body_path: ${{ env.RELEASE_NOTES_PATH }}
-        draft: ${{ inputs.draft }}
-        prerelease: ${{ inputs.prerelease }}
+
