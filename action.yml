@@ -53,6 +53,7 @@ runs:
         else
           echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
         fi
+        echo "Current version: $LATEST_TAG"
  
     - name: Determine version bump
       shell: bash
@@ -102,43 +103,72 @@ runs:
       id: extract-notes
       run: |
         if [ -f CHANGELOG.md ]; then
-          # Try to find the section for the new version
-          VERSION_PATTERN="^## \[?v?$NEW_VERSION\]?"
-          START_LINE=$(grep -n "$VERSION_PATTERN" CHANGELOG.md | cut -d: -f1)
+          # Create a temporary file for release notes
+          TEMP_FILE="release_notes.txt"
+          
+          # Look for the version section (being more flexible with the pattern matching)
+          VERSION_PATTERN="## \[?v?${NEW_VERSION}\]?|## v?${NEW_VERSION}"
+          
+          # Debug output
+          echo "Looking for version pattern: $VERSION_PATTERN"
+          echo "Content of CHANGELOG.md:"
+          cat CHANGELOG.md
+          
+          # Find the section and extract content
+          START_LINE=$(grep -n -E "$VERSION_PATTERN" CHANGELOG.md | cut -d: -f1 || echo "")
           
           if [ ! -z "$START_LINE" ]; then
+            echo "Found version section at line $START_LINE"
+            
             # Find the next version header or EOF
-            NEXT_VERSION_LINE=$(tail -n +$((START_LINE + 1)) CHANGELOG.md | grep -n "^## \[" | head -n 1 | cut -d: -f1)
+            NEXT_LINE=$(tail -n +$((START_LINE + 1)) CHANGELOG.md | grep -n "^## " | head -n 1 | cut -d: -f1 || echo "")
             
-            if [ ! -z "$NEXT_VERSION_LINE" ]; then
-              # If we found another version header, extract content between them
-              END_LINE=$((START_LINE + NEXT_VERSION_LINE - 1))
-              RELEASE_NOTES=$(sed -n "${START_LINE},${END_LINE}p" CHANGELOG.md)
+            if [ ! -z "$NEXT_LINE" ]; then
+              # Extract content between version headers
+              END_LINE=$((START_LINE + NEXT_LINE - 1))
+              sed -n "${START_LINE},${END_LINE}p" CHANGELOG.md > "$TEMP_FILE"
             else
-              # If no next version found, extract until the end
-              RELEASE_NOTES=$(tail -n +${START_LINE} CHANGELOG.md)
+              # Extract from version header to EOF
+              tail -n +${START_LINE} CHANGELOG.md > "$TEMP_FILE"
             fi
-            
-            # Save release notes to a temporary file to preserve formatting
-            echo "$RELEASE_NOTES" > release_notes.tmp
-            echo "RELEASE_NOTES_PATH=release_notes.tmp" >> $GITHUB_ENV
           else
-            echo "No matching version found in CHANGELOG.md"
-            echo "## Release v$NEW_VERSION" > release_notes.tmp
-            echo "" >> release_notes.tmp
-            echo "Changes in this Release" >> release_notes.tmp
-            echo "- PR: #${{ github.event.pull_request.number }}" >> release_notes.tmp
-            echo "- Title: ${{ github.event.pull_request.title }}" >> release_notes.tmp
-            echo "RELEASE_NOTES_PATH=release_notes.tmp" >> $GITHUB_ENV
+            echo "No matching version found in CHANGELOG.md, using PR details"
+            {
+              echo "## Release v${NEW_VERSION}"
+              echo ""
+              echo "### Changes"
+              echo "- PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
+              
+              if [ ! -z "${{ github.event.pull_request.body }}" ]; then
+                echo ""
+                echo "### Description"
+                echo "${{ github.event.pull_request.body }}"
+              fi
+            } > "$TEMP_FILE"
           fi
+          
+          # Set release notes path
+          echo "RELEASE_NOTES_PATH=${TEMP_FILE}" >> $GITHUB_ENV
+          
+          # Debug output of release notes
+          echo "Generated Release Notes:"
+          cat "$TEMP_FILE"
+          
         else
-          echo "CHANGELOG.md not found, using default release notes"
-          echo "## Release v$NEW_VERSION" > release_notes.tmp
-          echo "" >> release_notes.tmp
-          echo "Changes in this Release" >> release_notes.tmp
-          echo "- PR: #${{ github.event.pull_request.number }}" >> release_notes.tmp
-          echo "- Title: ${{ github.event.pull_request.title }}" >> release_notes.tmp
-          echo "RELEASE_NOTES_PATH=release_notes.tmp" >> $GITHUB_ENV
+          echo "CHANGELOG.md not found, creating basic release notes"
+          {
+            echo "## Release v${NEW_VERSION}"
+            echo ""
+            echo "### Changes"
+            echo "- PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
+            
+            if [ ! -z "${{ github.event.pull_request.body }}" ]; then
+              echo ""
+              echo "### Description"
+              echo "${{ github.event.pull_request.body }}"
+            fi
+          } > "release_notes.txt"
+          echo "RELEASE_NOTES_PATH=release_notes.txt" >> $GITHUB_ENV
         fi
  
     - name: Create and push tag
