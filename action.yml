@@ -13,7 +13,6 @@ inputs:
     description: 'Mark as prerelease'
     required: false
     default: 'false'
- 
 runs:
   using: 'composite'
   steps:
@@ -91,7 +90,7 @@ runs:
         esac
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
         echo "New version: v$NEW_VERSION"
-
+ 
     - name: Extract release notes
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
@@ -99,25 +98,36 @@ runs:
       run: |
         if [ -f CHANGELOG.md ]; then
           TEMP_FILE="release_notes.txt"
-          echo "Searching for version: v${NEW_VERSION}"
-          START_LINE=$(grep -n "^## \[${NEW_VERSION}\]" CHANGELOG.md | cut -d: -f1 || true)
-          if [ -z "$START_LINE" ]; then
-            START_LINE=$(grep -n "^## \[v${NEW_VERSION}\]" CHANGELOG.md | cut -d: -f1 || true)
-          fi
-          if [ -z "$START_LINE" ]; then
-            START_LINE=$(grep -n "^## ${NEW_VERSION}" CHANGELOG.md | cut -d: -f1 || true)
-          fi
-          if [ -z "$START_LINE" ]; then
-            START_LINE=$(grep -n "^## v${NEW_VERSION}" CHANGELOG.md | cut -d: -f1 || true)
-          fi
-
+          echo "Searching for version: ${NEW_VERSION}"
+          # Add debug output
+          echo "CHANGELOG.md contents:"
+          cat CHANGELOG.md
+          # Try different version formats
+          PATTERNS=(
+            "## [${NEW_VERSION}]"
+            "## [v${NEW_VERSION}]"
+            "## ${NEW_VERSION}"
+            "## v${NEW_VERSION}"
+          )
+          START_LINE=""
+          for pattern in "${PATTERNS[@]}"; do
+            echo "Trying pattern: $pattern"
+            START_LINE=$(grep -n "^${pattern}" CHANGELOG.md | cut -d: -f1 || true)
+            if [ ! -z "$START_LINE" ]; then
+              echo "Found match with pattern: $pattern"
+              break
+            fi
+          done
           if [ ! -z "$START_LINE" ]; then
             echo "Found version section at line $START_LINE"
+            # Find the next version section or end of file
             NEXT_LINE=$(tail -n +$((START_LINE + 1)) CHANGELOG.md | grep -n "^## " | head -n 1 | cut -d: -f1 || echo "")
             if [ ! -z "$NEXT_LINE" ]; then
               END_LINE=$((START_LINE + NEXT_LINE - 1))
+              echo "Extracting lines $START_LINE to $END_LINE"
               sed -n "${START_LINE},${END_LINE}p" CHANGELOG.md > "$TEMP_FILE"
             else
+              echo "Extracting from line $START_LINE to end of file"
               tail -n +${START_LINE} CHANGELOG.md > "$TEMP_FILE"
             fi
             echo "Extracted release notes:"
@@ -136,14 +146,19 @@ runs:
               fi
             } > "$TEMP_FILE"
           fi
+          # Ensure file is not empty
           if [ ! -s "$TEMP_FILE" ]; then
             echo "## Release v${NEW_VERSION}" > "$TEMP_FILE"
             echo "" >> "$TEMP_FILE"
             echo "### Changes" >> "$TEMP_FILE"
             echo "- Automated version bump" >> "$TEMP_FILE"
           fi
+          # Debug output
+          echo "Final release notes content:"
+          cat "$TEMP_FILE"
           echo "RELEASE_NOTES_PATH=${TEMP_FILE}" >> $GITHUB_ENV
         else
+          echo "CHANGELOG.md not found!"
           {
             echo "## Release v${NEW_VERSION}"
             echo ""
