@@ -14,6 +14,11 @@ inputs:
     required: false
     default: 'false'
 
+outputs:
+  new_version:
+    description: 'The newly created version tag'
+    value: ${{ steps.bump-version.outputs.bumped_tag }}
+
 runs:
   using: 'composite'
   steps:
@@ -95,7 +100,7 @@ runs:
         esac
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
         echo "New version: v$NEW_VERSION"
-        echo "::set-output name=bumped_tag::v$NEW_VERSION"  # Set output variable
+        echo "::set-output name=bumped_tag::v$NEW_VERSION"
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -105,18 +110,3 @@ runs:
         git config user.email "actions@github.com"
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
         git push origin "v$NEW_VERSION"
-
-    - name: Create Release
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ inputs.token }}
-      with:
-        tag_name: v${{ env.NEW_VERSION }}
-        release_name: Release v${{ env.NEW_VERSION }}
-        body: |
-          Changes in this Release
-          - PR: #${{ github.event.pull_request.number }}
-          - Title: ${{ github.event.pull_request.title }}
-        draft: ${{ inputs.draft }}
-        prerelease: ${{ inputs.prerelease }}
