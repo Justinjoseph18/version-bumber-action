@@ -18,6 +18,9 @@ outputs:
   new_version:
     description: 'The newly created version tag'
     value: ${{ steps.bump-version.outputs.bumped_tag }}
+  release_notes:
+    description: 'Release notes from CHANGELOG.md'
+    value: ${{ steps.extract-notes.outputs.notes }}
 
 runs:
   using: 'composite'
@@ -102,6 +105,41 @@ runs:
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
           echo "New version: v$NEW_VERSION"
           echo "bumped_tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Extract Release Notes from CHANGELOG.md
+      if: env.BUMP != 'none' && env.NEW_VERSION != ''
+      shell: bash
+      id: extract-notes
+      run: |
+        if [ -f CHANGELOG.md ]; then
+          # Extract content between the new version header and the next version header or EOF
+          VERSION_PATTERN="^## \[?v?$NEW_VERSION\]?"
+          NEXT_VERSION_PATTERN="^## \[?v?"
+          
+          # Use awk to extract the content
+          RELEASE_NOTES=$(awk -v version_pattern="$VERSION_PATTERN" -v next_pattern="$NEXT_VERSION_PATTERN" '
+            $0 ~ version_pattern {p=1;next}
+            p && $0 ~ next_pattern {p=0}
+            p {print}
+          ' CHANGELOG.md)
+          
+          # If release notes were found, clean them up and set as output
+          if [ ! -z "$RELEASE_NOTES" ]; then
+            # Create a temporary file for the notes
+            echo "$RELEASE_NOTES" > temp_notes.txt
+            # Set the notes as output
+            echo "notes<<EOF" >> $GITHUB_OUTPUT
+            cat temp_notes.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            rm temp_notes.txt
+          else
+            echo "No release notes found for version v$NEW_VERSION in CHANGELOG.md"
+            echo "notes=No release notes available" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "CHANGELOG.md not found"
+          echo "notes=No CHANGELOG.md file found" >> $GITHUB_OUTPUT
         fi
 
     - name: Create and push tag
