@@ -18,45 +18,25 @@ inputs:
     required: false
     default: 'CHANGELOG.md'
 
+outputs:
+  new_version:
+    description: 'The new version number'
+    value: ${{ steps.bump-version.outputs.new_version }}
+  bump_type:
+    description: 'The type of bump performed'
+    value: ${{ steps.version-bump.outputs.bump }}
+
 runs:
   using: 'composite'
   steps:
-    - name: Get version from package.json
-      shell: bash
-      id: package-version
-      run: |
-        if [ -f package.json ]; then
-          VERSION=$(node -p "require('./package.json').version")
-          echo "PACKAGE_VERSION=v${VERSION}" >> $GITHUB_ENV
-        fi
-      continue-on-error: true
-
-    - name: Get version from .version file
-      shell: bash
-      id: version-file
-      run: |
-        if [ -f .version ]; then
-          VERSION=$(cat .version)
-          echo "FILE_VERSION=v${VERSION}" >> $GITHUB_ENV
-        fi
-      continue-on-error: true
-
     - name: Get latest tag
       shell: bash
       id: get-latest-tag
       run: |
         git fetch --tags
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        # Priority order: git tag > package.json > .version file > default
-        if [ ! -z "$LATEST_TAG" ]; then
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-        elif [ ! -z "$PACKAGE_VERSION" ]; then
-          echo "LATEST_TAG=$PACKAGE_VERSION" >> $GITHUB_ENV
-        elif [ ! -z "$FILE_VERSION" ]; then
-          echo "LATEST_TAG=$FILE_VERSION" >> $GITHUB_ENV
-        else
-          echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
-        fi
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
+        echo "Current latest tag: ${LATEST_TAG}"
 
     - name: Determine version bump
       shell: bash
@@ -64,15 +44,20 @@ runs:
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
+          echo "BUMP=major" >> $GITHUB_OUTPUT
           echo "BUMP=major" >> $GITHUB_ENV
         elif [[ $PR_TITLE =~ ^feat: ]]; then
+          echo "BUMP=minor" >> $GITHUB_OUTPUT
           echo "BUMP=minor" >> $GITHUB_ENV
         elif [[ $PR_TITLE =~ ^fix: ]]; then
+          echo "BUMP=patch" >> $GITHUB_OUTPUT
           echo "BUMP=patch" >> $GITHUB_ENV
         else
+          echo "BUMP=none" >> $GITHUB_OUTPUT
           echo "BUMP=none" >> $GITHUB_ENV
         fi
         echo "PR_TITLE=$PR_TITLE" >> $GITHUB_ENV
+        echo "Determined bump type: $BUMP"
 
     - name: Bump version
       if: env.BUMP != 'none'
@@ -81,6 +66,7 @@ runs:
       run: |
         CURRENT_VERSION=${LATEST_TAG#v}
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+        
         case $BUMP in
           major)
             NEW_VERSION="$((MAJOR + 1)).0.0"
@@ -92,8 +78,16 @@ runs:
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
             ;;
         esac
+        
+        # Check if the tag already exists
+        if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
+          echo "Tag v$NEW_VERSION already exists. Skipping version bump."
+          exit 1
+        fi
+        
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-        echo "New version: v$NEW_VERSION"
+        echo "Bumped version to: v$NEW_VERSION"
 
     - name: Update CHANGELOG.md
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -122,33 +116,39 @@ runs:
         } > "$TEMP_FILE"
         mv "$TEMP_FILE" "$CHANGELOG_FILE"
         
+        # Configure git
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        
         # Stage and commit changelog
         git add "$CHANGELOG_FILE"
         git commit -m "docs: update changelog for v${{ env.NEW_VERSION }}"
+        
+        # Push changes to the base branch
+        git push origin HEAD:${{ github.event.pull_request.base.ref }}
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       run: |
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
+        # Create and push the new tag
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-        git push origin HEAD:${{ github.event.pull_request.base.ref }} --tags
+        git push origin "v$NEW_VERSION"
 
-    - name: Extract release notes from changelog
+    - name: Extract release notes
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       id: extract-notes
       run: |
         CHANGELOG_FILE="${{ inputs.changelog_path }}"
-        VERSION_HEADER="## [v${{ env.NEW_VERSION }}]"
-        RELEASE_NOTES=$(awk -v ver="$VERSION_HEADER" '
+        VERSION_SECTION=$(awk -v ver="## [v${{ env.NEW_VERSION }}]" '
           $0 ~ ver {p=1;next}
           /^## / {p=0}
           p {print}
-        ' "$CHANGELOG_FILE" | sed '/^$/d')
+        ' "$CHANGELOG_FILE")
+        
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        echo "$RELEASE_NOTES" >> $GITHUB_ENV
+        echo "$VERSION_SECTION" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
 
     - name: Create Release
@@ -159,6 +159,7 @@ runs:
       with:
         tag_name: v${{ env.NEW_VERSION }}
         release_name: Release v${{ env.NEW_VERSION }}
-        body: ${{ env.RELEASE_NOTES }}
+        body: |
+          ${{ env.RELEASE_NOTES }}
         draft: ${{ inputs.draft }}
         prerelease: ${{ inputs.prerelease }}
