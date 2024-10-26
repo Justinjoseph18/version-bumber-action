@@ -5,6 +5,10 @@ inputs:
     description: 'GitHub token for creating releases'
     required: true
     default: ${{ github.token }}
+  changelog_file:
+    description: 'The path to the changelog file'
+    required: false
+    default: 'CHANGELOG.md'
   draft:
     description: 'Create release as draft'
     required: false
@@ -13,18 +17,14 @@ inputs:
     description: 'Mark as prerelease'
     required: false
     default: 'false'
-  changelog_path:
-    description: 'Path to the CHANGELOG.md file'
-    required: false
-    default: 'CHANGELOG.md'
 
 outputs:
   new_version:
     description: 'The new version number'
     value: ${{ steps.bump-version.outputs.new_version }}
-  bump_type:
-    description: 'The type of bump performed'
-    value: ${{ steps.version-bump.outputs.bump }}
+  release_notes:
+    description: 'The extracted release notes'
+    value: ${{ steps.extract-notes.outputs.release_notes }}
 
 runs:
   using: 'composite'
@@ -46,18 +46,21 @@ runs:
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
           echo "BUMP=major" >> $GITHUB_OUTPUT
           echo "BUMP=major" >> $GITHUB_ENV
+          echo "TYPE=Breaking" >> $GITHUB_ENV
         elif [[ $PR_TITLE =~ ^feat: ]]; then
           echo "BUMP=minor" >> $GITHUB_OUTPUT
           echo "BUMP=minor" >> $GITHUB_ENV
+          echo "TYPE=Added" >> $GITHUB_ENV
         elif [[ $PR_TITLE =~ ^fix: ]]; then
           echo "BUMP=patch" >> $GITHUB_OUTPUT
           echo "BUMP=patch" >> $GITHUB_ENV
+          echo "TYPE=Fixed" >> $GITHUB_ENV
         else
           echo "BUMP=none" >> $GITHUB_OUTPUT
           echo "BUMP=none" >> $GITHUB_ENV
+          echo "TYPE=Changed" >> $GITHUB_ENV
         fi
         echo "PR_TITLE=$PR_TITLE" >> $GITHUB_ENV
-        echo "Determined bump type: $BUMP"
 
     - name: Bump version
       if: env.BUMP != 'none'
@@ -79,7 +82,6 @@ runs:
             ;;
         esac
         
-        # Check if the tag already exists
         if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
           echo "Tag v$NEW_VERSION already exists. Skipping version bump."
           exit 1
@@ -87,34 +89,42 @@ runs:
         
         echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-        echo "Bumped version to: v$NEW_VERSION"
 
     - name: Update CHANGELOG.md
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       run: |
-        CHANGELOG_FILE="${{ inputs.changelog_path }}"
+        CHANGELOG_FILE="${{ inputs.changelog_file }}"
         DATE=$(date +%Y-%m-%d)
         
         # Create changelog if it doesn't exist
         if [ ! -f "$CHANGELOG_FILE" ]; then
-          echo "# Changelog" > "$CHANGELOG_FILE"
-          echo "" >> "$CHANGELOG_FILE"
+          cat > "$CHANGELOG_FILE" << EOL
+# Changelog
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+EOL
         fi
         
-        # Prepare new changelog entry
-        TEMP_FILE=$(mktemp)
-        {
-          head -n 1 "$CHANGELOG_FILE"
-          echo ""
-          echo "## [v${{ env.NEW_VERSION }}] - $DATE"
-          echo ""
-          echo "### Changes"
-          echo "- ${PR_TITLE} (#${{ github.event.pull_request.number }})"
-          echo ""
-          tail -n +2 "$CHANGELOG_FILE"
-        } > "$TEMP_FILE"
-        mv "$TEMP_FILE" "$CHANGELOG_FILE"
+        # Prepare new version entry
+        NEW_ENTRY="## [v${{ env.NEW_VERSION }}] - $DATE\n\n### ${TYPE}\n- ${PR_TITLE#*/: } (#${{ github.event.pull_request.number }})\n"
+        
+        # Add new version and move Unreleased content
+        awk -v new_entry="$NEW_ENTRY" '
+        /^## \[Unreleased\]/ {
+          print
+          print ""
+          print new_entry
+          next
+        }
+        { print }
+        ' "$CHANGELOG_FILE" > temp_changelog
+        mv temp_changelog "$CHANGELOG_FILE"
         
         # Configure git
         git config user.name "GitHub Actions"
@@ -123,33 +133,42 @@ runs:
         # Stage and commit changelog
         git add "$CHANGELOG_FILE"
         git commit -m "docs: update changelog for v${{ env.NEW_VERSION }}"
-        
-        # Push changes to the base branch
         git push origin HEAD:${{ github.event.pull_request.base.ref }}
-
-    - name: Create and push tag
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      shell: bash
-      run: |
-        # Create and push the new tag
-        git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-        git push origin "v$NEW_VERSION"
 
     - name: Extract release notes
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       id: extract-notes
       run: |
-        CHANGELOG_FILE="${{ inputs.changelog_path }}"
-        VERSION_SECTION=$(awk -v ver="## [v${{ env.NEW_VERSION }}]" '
-          $0 ~ ver {p=1;next}
-          /^## / {p=0}
-          p {print}
-        ' "$CHANGELOG_FILE")
+        CHANGELOG_FILE="${{ inputs.changelog_file }}"
+        VERSION_HEADER="## [v${{ env.NEW_VERSION }}]"
         
-        echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        echo "$VERSION_SECTION" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        # Extract release notes between version headers
+        RELEASE_NOTES=$(awk -v ver="$VERSION_HEADER" '
+          $0 ~ ver {p=1;next}
+          /^## \[/ {p=0}
+          p {print}
+        ' "$CHANGELOG_FILE" | sed '/./,$!d' | sed '/^$/N;/^\n$/D')
+        
+        # Store release notes in output and env
+        {
+          echo "release_notes<<EOF"
+          echo "$RELEASE_NOTES"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+        
+        {
+          echo "RELEASE_NOTES<<EOF"
+          echo "$RELEASE_NOTES"
+          echo "EOF"
+        } >> "$GITHUB_ENV"
+
+    - name: Create and push tag
+      if: env.BUMP != 'none' && env.NEW_VERSION != ''
+      shell: bash
+      run: |
+        git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+        git push origin "v$NEW_VERSION"
 
     - name: Create Release
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -159,7 +178,6 @@ runs:
       with:
         tag_name: v${{ env.NEW_VERSION }}
         release_name: Release v${{ env.NEW_VERSION }}
-        body: |
-          ${{ env.RELEASE_NOTES }}
+        body: ${{ env.RELEASE_NOTES }}
         draft: ${{ inputs.draft }}
         prerelease: ${{ inputs.prerelease }}
