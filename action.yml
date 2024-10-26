@@ -90,16 +90,23 @@ runs:
         echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
 
-    - name: Update CHANGELOG.md
+    - name: Setup changelog handler
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       run: |
-        CHANGELOG_FILE="${{ inputs.changelog_file }}"
-        DATE=$(date +%Y-%m-%d)
+        cat > changelog-handler.sh << 'EOL'
+        #!/bin/bash
         
-        # Create changelog if it doesn't exist
-        if [ ! -f "$CHANGELOG_FILE" ]; then
-          cat > "$CHANGELOG_FILE" << EOL
+        update_changelog() {
+            local CHANGELOG_FILE="$1"
+            local NEW_VERSION="$2"
+            local TYPE="$3"
+            local PR_TITLE="$4"
+            local PR_NUMBER="$5"
+            local DATE="$(date +%Y-%m-%d)"
+            
+            if [ ! -f "$CHANGELOG_FILE" ]; then
+                cat > "$CHANGELOG_FILE" << TEMPLATE
 # Changelog
 All notable changes to this project will be documented in this file.
 
@@ -108,30 +115,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-EOL
-        fi
-        
-        # Prepare new version entry
-        NEW_ENTRY="## [v${{ env.NEW_VERSION }}] - $DATE\n\n### ${TYPE}\n- ${PR_TITLE#*/: } (#${{ github.event.pull_request.number }})\n"
-        
-        # Add new version and move Unreleased content
-        awk -v new_entry="$NEW_ENTRY" '
-        /^## \[Unreleased\]/ {
-          print
-          print ""
-          print new_entry
-          next
+TEMPLATE
+            fi
+
+            NEW_ENTRY="## [v${NEW_VERSION}] - ${DATE}\n\n### ${TYPE}\n- ${PR_TITLE#*/: } (#${PR_NUMBER})\n"
+            
+            TEMP_FILE=$(mktemp)
+            
+            awk -v new_entry="$NEW_ENTRY" '
+            BEGIN { found_unreleased = 0; printed_new_entry = 0 }
+            
+            /^## \[Unreleased\]/ {
+                if (!found_unreleased) {
+                    print
+                    print ""
+                    print new_entry
+                    found_unreleased = 1
+                    printed_new_entry = 1
+                    next
+                }
+            }
+            
+            END {
+                if (!found_unreleased) {
+                    print "## [Unreleased]\n"
+                    print new_entry
+                }
+            }
+            
+            { print }
+            ' "$CHANGELOG_FILE" > "$TEMP_FILE"
+
+            mv "$TEMP_FILE" "$CHANGELOG_FILE"
+            
+            if ! grep -q "## \[v${NEW_VERSION}\] - ${DATE}" "$CHANGELOG_FILE"; then
+                echo "Error: Failed to update changelog properly"
+                exit 1
+            fi
         }
-        { print }
-        ' "$CHANGELOG_FILE" > temp_changelog
-        mv temp_changelog "$CHANGELOG_FILE"
+
+        extract_release_notes() {
+            local CHANGELOG_FILE="$1"
+            local VERSION="$2"
+            
+            awk -v ver="## [v${VERSION}]" '
+            $0 ~ ver {
+                p = 1
+                next
+            }
+            /^## \[/ {
+                if (p) exit
+            }
+            p && NF { 
+                if (buffer) buffer = buffer "\n"
+                buffer = buffer $0
+            }
+            END {
+                print buffer
+            }
+            ' "$CHANGELOG_FILE"
+        }
+        EOL
+        chmod +x changelog-handler.sh
+
+    - name: Update CHANGELOG.md
+      if: env.BUMP != 'none' && env.NEW_VERSION != ''
+      shell: bash
+      run: |
+        source ./changelog-handler.sh
         
-        # Configure git
+        update_changelog \
+          "${{ inputs.changelog_file }}" \
+          "${{ env.NEW_VERSION }}" \
+          "${{ env.TYPE }}" \
+          "${{ env.PR_TITLE }}" \
+          "${{ github.event.pull_request.number }}"
+        
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         
-        # Stage and commit changelog
-        git add "$CHANGELOG_FILE"
+        git add "${{ inputs.changelog_file }}"
         git commit -m "docs: update changelog for v${{ env.NEW_VERSION }}"
         git push origin HEAD:${{ github.event.pull_request.base.ref }}
 
@@ -140,28 +203,17 @@ EOL
       shell: bash
       id: extract-notes
       run: |
-        CHANGELOG_FILE="${{ inputs.changelog_file }}"
-        VERSION_HEADER="## [v${{ env.NEW_VERSION }}]"
+        source ./changelog-handler.sh
         
-        # Extract release notes between version headers
-        RELEASE_NOTES=$(awk -v ver="$VERSION_HEADER" '
-          $0 ~ ver {p=1;next}
-          /^## \[/ {p=0}
-          p {print}
-        ' "$CHANGELOG_FILE" | sed '/./,$!d' | sed '/^$/N;/^\n$/D')
+        RELEASE_NOTES=$(extract_release_notes "${{ inputs.changelog_file }}" "${{ env.NEW_VERSION }}")
         
-        # Store release notes in output and env
-        {
-          echo "release_notes<<EOF"
-          echo "$RELEASE_NOTES"
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
+        # Escape special characters for GitHub Actions
+        RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
+        RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
+        RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
         
-        {
-          echo "RELEASE_NOTES<<EOF"
-          echo "$RELEASE_NOTES"
-          echo "EOF"
-        } >> "$GITHUB_ENV"
+        echo "release_notes=${RELEASE_NOTES}" >> $GITHUB_OUTPUT
+        echo "RELEASE_NOTES=${RELEASE_NOTES}" >> $GITHUB_ENV
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -172,12 +224,29 @@ EOL
 
     - name: Create Release
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      uses: actions/create-release@v1
+      shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
-      with:
-        tag_name: v${{ env.NEW_VERSION }}
-        release_name: Release v${{ env.NEW_VERSION }}
-        body: ${{ env.RELEASE_NOTES }}
-        draft: ${{ inputs.draft }}
-        prerelease: ${{ inputs.prerelease }}
+      run: |
+        # Create JSON payload for the release
+        jq -n \
+          --arg tag_name "v$NEW_VERSION" \
+          --arg name "Release v$NEW_VERSION" \
+          --arg body "$RELEASE_NOTES" \
+          --argjson draft ${{ inputs.draft }} \
+          --argjson prerelease ${{ inputs.prerelease }} \
+          '{
+            tag_name: $tag_name,
+            name: $name,
+            body: $body,
+            draft: $draft,
+            prerelease: $prerelease
+          }' > release_payload.json
+        
+        # Create release using GitHub API
+        curl \
+          -X POST \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" \
+          -d @release_payload.json
