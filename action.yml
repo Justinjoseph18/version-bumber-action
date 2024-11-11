@@ -89,13 +89,54 @@ runs:
           echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
         fi
 
+    - name: Update CHANGELOG.md
+      if: env.BUMP != 'none' && env.NEW_VERSION != ''
+      shell: bash
+      run: |
+        # Create a temporary file
+        touch temp_changelog
+        current_date=$(date +%Y-%m-%d)
+        
+        # Read the original CHANGELOG.md line by line
+        while IFS= read -r line || [ -n "$line" ]; do
+          if [[ $line == "## [Unreleased]"* ]]; then
+            # Write the Unreleased header
+            echo "$line" >> temp_changelog
+            # Add a new empty unreleased section
+            echo "" >> temp_changelog
+            echo "### Added" >> temp_changelog
+            echo "- No unreleased changes" >> temp_changelog
+            echo "" >> temp_changelog
+            # Add the new version header
+            echo "## [${NEW_VERSION}] - ${current_date}" >> temp_changelog
+          else
+            echo "$line" >> temp_changelog
+          fi
+        done < "${{ inputs.changelog_file }}"
+        
+        # Replace the original file
+        mv temp_changelog "${{ inputs.changelog_file }}"
+        
+        # Stage the changes
+        git add "${{ inputs.changelog_file }}"
+        git commit -m "docs: update changelog for version ${NEW_VERSION}"
+        git push
+
     - name: Extract release notes
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      uses: ffurrer2/extract-release-notes@v2
+      shell: bash
       id: extract_notes
-      with:
-        changelog_file: ${{ inputs.changelog_file }}
-        prerelease: 'false'
+      run: |
+        # Extract everything between the new version header and the next version header
+        RELEASE_NOTES=$(awk "/## \[${NEW_VERSION}\]/{p=1;print;next} /## \[/{p=0} p" "${{ inputs.changelog_file }}")
+        
+        # Escape the release notes for GitHub Actions
+        RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
+        RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
+        RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
+        
+        echo "release_notes=${RELEASE_NOTES}" >> $GITHUB_OUTPUT
+        echo "RELEASE_NOTES=${RELEASE_NOTES}" >> $GITHUB_ENV
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -109,7 +150,6 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
-        RELEASE_NOTES: ${{ steps.extract_notes.outputs.release_notes }}
       run: |
         # Create JSON payload for the release
         jq -n \
