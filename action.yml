@@ -1,5 +1,5 @@
-name: 'Automatic Version Bumper'
-description: 'Automatically bump version and create release with changelog notes'
+name: 'Automatic Version and Release Manager'
+description: 'Automatically manage versions and create releases with changelog notes'
 author: 'Your Name'
 
 inputs:
@@ -18,6 +18,10 @@ inputs:
     description: 'Path to changelog file'
     required: false
     default: 'CHANGELOG.md'
+  tag:
+    description: 'Specific tag to extract release notes for (optional)'
+    required: false
+    default: ''
 
 outputs:
   new_version:
@@ -41,22 +45,30 @@ runs:
     - name: Get previous version
       shell: bash
       run: |
-        PREVIOUS_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-        PREVIOUS_VERSION=${PREVIOUS_VERSION#v}
-        echo "PREVIOUS_VERSION=${PREVIOUS_VERSION}" >> $GITHUB_ENV
-        echo "previous_version=${PREVIOUS_VERSION}" >> $GITHUB_OUTPUT
+        if [ -n "${{ inputs.tag }}" ]; then
+          echo "PREVIOUS_VERSION=${{ inputs.tag }}" >> $GITHUB_ENV
+          echo "previous_version=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          echo "TAG_MODE=true" >> $GITHUB_ENV
+        else
+          PREVIOUS_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          PREVIOUS_VERSION=${PREVIOUS_VERSION#v}
+          echo "PREVIOUS_VERSION=${PREVIOUS_VERSION}" >> $GITHUB_ENV
+          echo "previous_version=${PREVIOUS_VERSION}" >> $GITHUB_OUTPUT
+          echo "TAG_MODE=false" >> $GITHUB_ENV
+        fi
 
     - name: Determine version bump
+      if: env.TAG_MODE != 'true'
       shell: bash
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
-        if [[ $PR_TITLE == *"BREAKING CHANGE"* ]]; then
+        if [[ $PR_TITLE == *"BREAKING CHANGE"* ]] || [[ $PR_TITLE == *"!"* ]]; then
           echo "BUMP=major" >> $GITHUB_ENV
           echo "bump=major" >> $GITHUB_OUTPUT
         elif [[ $PR_TITLE == *"feat"* ]]; then
           echo "BUMP=minor" >> $GITHUB_ENV
           echo "bump=minor" >> $GITHUB_OUTPUT
-        elif [[ $PR_TITLE == *"fix"* ]]; then
+        elif [[ $PR_TITLE == *"fix"* ]] || [[ $PR_TITLE == *"docs"* ]] || [[ $PR_TITLE == *"chore"* ]] || [[ $PR_TITLE == *"refactor"* ]]; then
           echo "BUMP=patch" >> $GITHUB_ENV
           echo "bump=patch" >> $GITHUB_OUTPUT
         else
@@ -65,13 +77,14 @@ runs:
         fi
 
     - name: Calculate new version
+      if: env.TAG_MODE != 'true'
       shell: bash
       run: |
         if [ "$BUMP" != "none" ]; then
           IFS='.' read -r -a version_parts <<< "$PREVIOUS_VERSION"
-          MAJOR="${version_parts[0]}"
-          MINOR="${version_parts[1]}"
-          PATCH="${version_parts[2]}"
+          MAJOR="${version_parts[0]:-0}"
+          MINOR="${version_parts[1]:-0}"
+          PATCH="${version_parts[2]:-0}"
           
           case $BUMP in
             major)
@@ -89,48 +102,27 @@ runs:
           echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
         fi
 
-    - name: Update CHANGELOG.md
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      shell: bash
-      run: |
-        # Create a temporary file
-        touch temp_changelog
-        current_date=$(date +%Y-%m-%d)
-        
-        # Read the original CHANGELOG.md line by line
-        while IFS= read -r line || [ -n "$line" ]; do
-          if [[ $line == "## [Unreleased]"* ]]; then
-            # Write the Unreleased header
-            echo "$line" >> temp_changelog
-            # Add a new empty unreleased section
-            echo "" >> temp_changelog
-            echo "### Added" >> temp_changelog
-            echo "- No unreleased changes" >> temp_changelog
-            echo "" >> temp_changelog
-            # Add the new version header
-            echo "## [${NEW_VERSION}] - ${current_date}" >> temp_changelog
-          else
-            echo "$line" >> temp_changelog
-          fi
-        done < "${{ inputs.changelog_file }}"
-        
-        # Replace the original file
-        mv temp_changelog "${{ inputs.changelog_file }}"
-        
-        # Stage the changes
-        git add "${{ inputs.changelog_file }}"
-        git commit -m "docs: update changelog for version ${NEW_VERSION}"
-        git push
-
     - name: Extract release notes
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       id: extract_notes
       run: |
-        # Extract everything between the new version header and the next version header
-        RELEASE_NOTES=$(awk "/## \[${NEW_VERSION}\]/{p=1;print;next} /## \[/{p=0} p" "${{ inputs.changelog_file }}")
+        VERSION_TO_EXTRACT="${NEW_VERSION:-${PREVIOUS_VERSION}}"
+        VERSION_TO_EXTRACT="${VERSION_TO_EXTRACT#v}"  # Remove 'v' prefix if present
         
-        # Escape the release notes for GitHub Actions
+        # Extract notes between the specified version header and the next version header
+        RELEASE_NOTES=$(sed -n "/## \[${VERSION_TO_EXTRACT}\]/,/## \[/p" "${{ inputs.changelog_file }}" | sed '$d')
+        
+        # If no release notes found, try with 'v' prefix
+        if [ -z "$RELEASE_NOTES" ]; then
+          RELEASE_NOTES=$(sed -n "/## \[v${VERSION_TO_EXTRACT}\]/,/## \[/p" "${{ inputs.changelog_file }}" | sed '$d')
+        fi
+        
+        if [ -z "$RELEASE_NOTES" ]; then
+          echo "No release notes found for version ${VERSION_TO_EXTRACT}"
+          exit 1
+        fi
+        
+        # Clean up and escape the release notes
         RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
         RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
         RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
@@ -138,23 +130,50 @@ runs:
         echo "release_notes=${RELEASE_NOTES}" >> $GITHUB_OUTPUT
         echo "RELEASE_NOTES=${RELEASE_NOTES}" >> $GITHUB_ENV
 
+    - name: Update CHANGELOG.md
+      if: env.TAG_MODE != 'true' && env.BUMP != 'none' && env.NEW_VERSION != ''
+      shell: bash
+      run: |
+        touch temp_changelog
+        current_date=$(date +%Y-%m-%d)
+        
+        while IFS= read -r line || [ -n "$line" ]; do
+          if [[ $line == "## [Unreleased]"* ]]; then
+            echo "$line" >> temp_changelog
+            echo "" >> temp_changelog
+            echo "### Added" >> temp_changelog
+            echo "- No unreleased changes" >> temp_changelog
+            echo "" >> temp_changelog
+            echo "## [${NEW_VERSION}] - ${current_date}" >> temp_changelog
+          else
+            echo "$line" >> temp_changelog
+          fi
+        done < "${{ inputs.changelog_file }}"
+        
+        mv temp_changelog "${{ inputs.changelog_file }}"
+        
+        git add "${{ inputs.changelog_file }}"
+        git commit -m "docs: update changelog for version ${NEW_VERSION}"
+        git push
+
     - name: Create and push tag
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
+      if: env.TAG_MODE != 'true' && env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       run: |
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
         git push origin "v$NEW_VERSION"
 
     - name: Create Release
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
+        VERSION_TO_RELEASE="${NEW_VERSION:-${PREVIOUS_VERSION}}"
+        
         # Create JSON payload for the release
         jq -n \
-          --arg tag_name "v$NEW_VERSION" \
-          --arg name "Release v$NEW_VERSION" \
+          --arg tag_name "v$VERSION_TO_RELEASE" \
+          --arg name "Release v$VERSION_TO_RELEASE" \
           --arg body "$RELEASE_NOTES" \
           --argjson draft ${{ inputs.draft }} \
           --argjson prerelease ${{ inputs.prerelease }} \
