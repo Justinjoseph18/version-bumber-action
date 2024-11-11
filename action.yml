@@ -1,6 +1,7 @@
-name: 'Automatic Version and Release Notes'
-description: 'Automatically bumps version, creates releases, and adds changelog notes based on PR conventions'
- 
+@@ -0,0 +1,122 @@
+# action.yml
+name: 'Automatic Version Bumper'
+description: 'Automatically bumps version and creates releases based on PR title conventions'
 inputs:
   token:
     description: 'GitHub token for creating releases'
@@ -14,10 +15,6 @@ inputs:
     description: 'Mark as prerelease'
     required: false
     default: 'false'
-  changelog_file:
-    description: 'Path to changelog file'
-    required: false
-    default: 'CHANGELOG.md'
  
 runs:
   using: 'composite'
@@ -64,15 +61,21 @@ runs:
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
+        # First check for breaking changes
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
           echo "BUMP=major" >> $GITHUB_ENV
+        # Then check for features
         elif [[ $PR_TITLE =~ ^feat: ]]; then
           echo "BUMP=minor" >> $GITHUB_ENV
+        # Then check for fixes
         elif [[ $PR_TITLE =~ ^fix: ]]; then
           echo "BUMP=patch" >> $GITHUB_ENV
         else
           echo "BUMP=none" >> $GITHUB_ENV
         fi
+        # Debug output
+        echo "PR Title: $PR_TITLE"
+        echo "Bump Type: $BUMP"
  
     - name: Bump version
       if: env.BUMP != 'none'
@@ -93,31 +96,7 @@ runs:
             ;;
         esac
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
- 
-    - name: Extract release notes
-      if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      shell: bash
-      id: extract-notes
-      run: |
-        VERSION="v$NEW_VERSION"
-        CHANGELOG_FILE="${{ inputs.changelog_file }}"
-        if [ -f "$CHANGELOG_FILE" ]; then
-          # Extract content between current version header and next version header
-          awk -v ver="$VERSION" '
-            $0 ~ "^## \\[" ver "\\]" { p=1; next }
-            /^## \[/ { if(p) exit }
-            p { print }
-          ' "$CHANGELOG_FILE" > release_notes.tmp
-          # Remove empty lines from the beginning and end
-          NOTES=$(cat release_notes.tmp | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}')
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-          echo "$NOTES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          rm release_notes.tmp
-        else
-          echo "Warning: Changelog file not found at $CHANGELOG_FILE"
-          echo "RELEASE_NOTES=No changelog entry found for $VERSION" >> $GITHUB_ENV
-        fi
+        echo "New version: v$NEW_VERSION"
  
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -137,8 +116,7 @@ runs:
         tag_name: v${{ env.NEW_VERSION }}
         release_name: Release v${{ env.NEW_VERSION }}
         body: |
-          ${{ env.RELEASE_NOTES }}
-          PR Details:
+          Changes in this Release
           - PR: #${{ github.event.pull_request.number }}
           - Title: ${{ github.event.pull_request.title }}
         draft: ${{ inputs.draft }}
