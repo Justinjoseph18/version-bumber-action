@@ -1,6 +1,6 @@
 name: 'Automatic Version and Release Manager'
 description: 'Automatically manage versions and create releases with changelog notes'
-author: 'Your Name'
+author: 'Justin Joseph'
 
 inputs:
   token:
@@ -107,22 +107,27 @@ runs:
       id: extract_notes
       run: |
         VERSION_TO_EXTRACT="${NEW_VERSION:-${PREVIOUS_VERSION}}"
-        VERSION_TO_EXTRACT="${VERSION_TO_EXTRACT#v}"  # Remove 'v' prefix if present
         
-        # Extract notes between the specified version header and the next version header
-        RELEASE_NOTES=$(sed -n "/## \[${VERSION_TO_EXTRACT}\]/,/## \[/p" "${{ inputs.changelog_file }}" | sed '$d')
+        # First, get the PR title and body
+        PR_TITLE="${{ github.event.pull_request.title }}"
+        PR_BODY="${{ github.event.pull_request.body }}"
         
-        # If no release notes found, try with 'v' prefix
-        if [ -z "$RELEASE_NOTES" ]; then
-          RELEASE_NOTES=$(sed -n "/## \[v${VERSION_TO_EXTRACT}\]/,/## \[/p" "${{ inputs.changelog_file }}" | sed '$d')
+        # Extract Unreleased section from changelog
+        UNRELEASED_CONTENT=$(awk '/^## \[Unreleased\]/{p=1;next} /^## \[/{p=0} p' "${{ inputs.changelog_file }}")
+        
+        # Combine PR information with Unreleased content
+        RELEASE_NOTES="## Changes\n\n"
+        RELEASE_NOTES+="PR: ${PR_TITLE}\n\n"
+        
+        if [ ! -z "$PR_BODY" ]; then
+          RELEASE_NOTES+="Description:\n${PR_BODY}\n\n"
         fi
         
-        if [ -z "$RELEASE_NOTES" ]; then
-          echo "No release notes found for version ${VERSION_TO_EXTRACT}"
-          exit 1
+        if [ ! -z "$UNRELEASED_CONTENT" ]; then
+          RELEASE_NOTES+="Changelog:\n${UNRELEASED_CONTENT}\n"
         fi
         
-        # Clean up and escape the release notes
+        # Escape the release notes for GitHub Actions
         RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
         RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
         RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
@@ -134,18 +139,41 @@ runs:
       if: env.TAG_MODE != 'true' && env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       run: |
-        touch temp_changelog
+        PR_TITLE="${{ github.event.pull_request.title }}"
         current_date=$(date +%Y-%m-%d)
         
+        # Create temporary file
+        touch temp_changelog
+        
+        # Read changelog line by line
+        in_unreleased=false
         while IFS= read -r line || [ -n "$line" ]; do
           if [[ $line == "## [Unreleased]"* ]]; then
+            # Write Unreleased section
             echo "$line" >> temp_changelog
             echo "" >> temp_changelog
             echo "### Added" >> temp_changelog
             echo "- No unreleased changes" >> temp_changelog
             echo "" >> temp_changelog
+            
+            # Add new version section with content from Unreleased
             echo "## [${NEW_VERSION}] - ${current_date}" >> temp_changelog
-          else
+            echo "" >> temp_changelog
+            echo "### Changes" >> temp_changelog
+            echo "- ${PR_TITLE}" >> temp_changelog
+            echo "" >> temp_changelog
+            
+            # Copy existing Unreleased content
+            while IFS= read -r content_line; do
+              if [[ $content_line == "## ["* ]]; then
+                break
+              fi
+              if [[ $content_line != "### Added"* && $content_line != "- No unreleased changes"* ]]; then
+                echo "$content_line" >> temp_changelog
+              fi
+            done < <(tail -n +2 "${{ inputs.changelog_file }")
+            in_unreleased=true
+          elif ! $in_unreleased; then
             echo "$line" >> temp_changelog
           fi
         done < "${{ inputs.changelog_file }}"
