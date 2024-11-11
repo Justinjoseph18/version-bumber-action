@@ -1,19 +1,19 @@
 # action.yml
 name: 'Automatic Version Bumper'
 description: 'Automatically bumps version and creates releases based on PR title conventions'
-inputs:
-  token:
-    description: 'GitHub token for creating releases'
-    required: true
-    default: ${{ github.token }}
-  draft:
-    description: 'Create release as draft'
-    required: false
-    default: 'false'
-  prerelease:
-    description: 'Mark as prerelease'
-    required: false
-    default: 'false'
+# inputs:
+#   token:
+#     description: 'GitHub token for creating releases'
+#     required: true
+#     default: ${{ github.token }}
+#   draft:
+#     description: 'Create release as draft'
+#     required: false
+#     default: 'false'
+#   prerelease:
+#     description: 'Mark as prerelease'
+#     required: false
+#     default: 'false'
  
 runs:
   using: 'composite'
