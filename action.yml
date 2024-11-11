@@ -1,31 +1,101 @@
 name: 'Automatic Version Bumper'
-# Previous inputs and outputs remain the same...
+description: 'Automatically bump version and create release with changelog notes'
+author: 'Your Name'
+
+inputs:
+  token:
+    description: 'GitHub token for authentication'
+    required: true
+  draft:
+    description: 'Create a draft release'
+    required: false
+    default: 'false'
+  prerelease:
+    description: 'Create a pre-release'
+    required: false
+    default: 'false'
+  changelog_file:
+    description: 'Path to changelog file'
+    required: false
+    default: 'CHANGELOG.md'
+
+outputs:
+  new_version:
+    description: 'The new version number'
+  previous_version:
+    description: 'The previous version number'
+  bump:
+    description: 'The type of bump performed (major, minor, patch, or none)'
+  release_notes:
+    description: 'The extracted release notes'
 
 runs:
   using: 'composite'
   steps:
-    # Previous steps remain the same until extract-notes...
+    - name: Set up Git
+      shell: bash
+      run: |
+        git config user.name "${GITHUB_ACTOR}"
+        git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+
+    - name: Get previous version
+      shell: bash
+      run: |
+        PREVIOUS_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        PREVIOUS_VERSION=${PREVIOUS_VERSION#v}
+        echo "PREVIOUS_VERSION=${PREVIOUS_VERSION}" >> $GITHUB_ENV
+        echo "previous_version=${PREVIOUS_VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Determine version bump
+      shell: bash
+      run: |
+        PR_TITLE="${{ github.event.pull_request.title }}"
+        if [[ $PR_TITLE == *"BREAKING CHANGE"* ]]; then
+          echo "BUMP=major" >> $GITHUB_ENV
+          echo "bump=major" >> $GITHUB_OUTPUT
+        elif [[ $PR_TITLE == *"feat"* ]]; then
+          echo "BUMP=minor" >> $GITHUB_ENV
+          echo "bump=minor" >> $GITHUB_OUTPUT
+        elif [[ $PR_TITLE == *"fix"* ]]; then
+          echo "BUMP=patch" >> $GITHUB_ENV
+          echo "bump=patch" >> $GITHUB_OUTPUT
+        else
+          echo "BUMP=none" >> $GITHUB_ENV
+          echo "bump=none" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Calculate new version
+      shell: bash
+      run: |
+        if [ "$BUMP" != "none" ]; then
+          IFS='.' read -r -a version_parts <<< "$PREVIOUS_VERSION"
+          MAJOR="${version_parts[0]}"
+          MINOR="${version_parts[1]}"
+          PATCH="${version_parts[2]}"
+          
+          case $BUMP in
+            major)
+              NEW_VERSION="$((MAJOR + 1)).0.0"
+              ;;
+            minor)
+              NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+              ;;
+            patch)
+              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+              ;;
+          esac
+          
+          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
+          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+        fi
 
     - name: Extract release notes
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      shell: bash
-      id: extract-notes
-      run: |
-        PR_TITLE="${{ github.event.pull_request.title }}"
-        PR_NUMBER="${{ github.event.pull_request.number }}"
-        
-        # Format the release notes in the desired format
-        RELEASE_NOTES="Changes in this Release\n"
-        RELEASE_NOTES+="* PR: #${PR_NUMBER}\n"
-        RELEASE_NOTES+="* Title: ${PR_TITLE}\n"
-        
-        # Escape special characters for GitHub Actions
-        RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
-        RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
-        RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
-        
-        echo "release_notes=${RELEASE_NOTES}" >> $GITHUB_OUTPUT
-        echo "RELEASE_NOTES=${RELEASE_NOTES}" >> $GITHUB_ENV
+      uses: ffurrer2/extract-release-notes@v2
+      id: extract_notes
+      with:
+        changelog_file: ${{ inputs.changelog_file }}
+        prerelease: 'false'
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -39,6 +109,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
+        RELEASE_NOTES: ${{ steps.extract_notes.outputs.release_notes }}
       run: |
         # Create JSON payload for the release
         jq -n \
