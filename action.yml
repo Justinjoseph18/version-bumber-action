@@ -1,6 +1,6 @@
 name: 'Automatic Version and Release Manager'
 description: 'Automatically manage versions and create releases with changelog notes'
-author: 'Justin Joseph'
+author: 'Your Name'
 
 inputs:
   token:
@@ -106,25 +106,59 @@ runs:
       shell: bash
       id: extract_notes
       run: |
+        # Function to extract section between two patterns
+        extract_section() {
+          local start_pattern="$1"
+          local file="$2"
+          local section=""
+          local in_section=false
+          
+          while IFS= read -r line; do
+            if [[ "$line" =~ ^##[[:space:]]\[ && $in_section == true ]]; then
+              break
+            fi
+            if [[ "$line" =~ ^##[[:space:]]\[$start_pattern ]]; then
+              in_section=true
+              section+="$line"$'\n'
+              continue
+            fi
+            if [[ $in_section == true ]]; then
+              section+="$line"$'\n'
+            fi
+          done < "$file"
+          
+          echo "$section"
+        }
+        
         VERSION_TO_EXTRACT="${NEW_VERSION:-${PREVIOUS_VERSION}}"
         
-        # First, get the PR title and body
-        PR_TITLE="${{ github.event.pull_request.title }}"
-        PR_BODY="${{ github.event.pull_request.body }}"
-        
-        # Extract Unreleased section from changelog
-        UNRELEASED_CONTENT=$(awk '/^## \[Unreleased\]/{p=1;next} /^## \[/{p=0} p' "${{ inputs.changelog_file }}")
-        
-        # Combine PR information with Unreleased content
-        RELEASE_NOTES="## Changes\n\n"
-        RELEASE_NOTES+="PR: ${PR_TITLE}\n\n"
-        
-        if [ ! -z "$PR_BODY" ]; then
-          RELEASE_NOTES+="Description:\n${PR_BODY}\n\n"
+        # First try to extract unreleased section
+        if [ "$BUMP" != "none" ]; then
+          RELEASE_NOTES=$(extract_section "Unreleased" "${{ inputs.changelog_file }}")
         fi
         
-        if [ ! -z "$UNRELEASED_CONTENT" ]; then
-          RELEASE_NOTES+="Changelog:\n${UNRELEASED_CONTENT}\n"
+        # If no unreleased section or we're in tag mode, try to extract specific version
+        if [ -z "$RELEASE_NOTES" ] || [ "$TAG_MODE" = "true" ]; then
+          RELEASE_NOTES=$(extract_section "$VERSION_TO_EXTRACT" "${{ inputs.changelog_file }}")
+          # Try with 'v' prefix if not found
+          if [ -z "$RELEASE_NOTES" ]; then
+            RELEASE_NOTES=$(extract_section "v$VERSION_TO_EXTRACT" "${{ inputs.changelog_file }}")
+          fi
+        fi
+        
+        # Add PR information if available
+        if [ -n "${{ github.event.pull_request.title }}" ]; then
+          PR_INFO="### Pull Request\n"
+          PR_INFO+="- Title: ${{ github.event.pull_request.title }}\n"
+          if [ -n "${{ github.event.pull_request.body }}" ]; then
+            PR_INFO+="- Description: ${{ github.event.pull_request.body }}\n"
+          fi
+          RELEASE_NOTES="$PR_INFO\n$RELEASE_NOTES"
+        fi
+        
+        if [ -z "$RELEASE_NOTES" ]; then
+          echo "No release notes found for version ${VERSION_TO_EXTRACT}"
+          exit 1
         fi
         
         # Escape the release notes for GitHub Actions
@@ -139,44 +173,26 @@ runs:
       if: env.TAG_MODE != 'true' && env.BUMP != 'none' && env.NEW_VERSION != ''
       shell: bash
       run: |
-        PR_TITLE="${{ github.event.pull_request.title }}"
         current_date=$(date +%Y-%m-%d)
         
-        # Create temporary file
-        touch temp_changelog
-        
-        # Read changelog line by line
-        in_unreleased=false
-        while IFS= read -r line || [ -n "$line" ]; do
-          if [[ $line == "## [Unreleased]"* ]]; then
-            # Write Unreleased section
-            echo "$line" >> temp_changelog
-            echo "" >> temp_changelog
-            echo "### Added" >> temp_changelog
-            echo "- No unreleased changes" >> temp_changelog
-            echo "" >> temp_changelog
-            
-            # Add new version section with content from Unreleased
-            echo "## [${NEW_VERSION}] - ${current_date}" >> temp_changelog
-            echo "" >> temp_changelog
-            echo "### Changes" >> temp_changelog
-            echo "- ${PR_TITLE}" >> temp_changelog
-            echo "" >> temp_changelog
-            
-            # Copy existing Unreleased content
-            while IFS= read -r content_line; do
-              if [[ $content_line == "## ["* ]]; then
-                break
-              fi
-              if [[ $content_line != "### Added"* && $content_line != "- No unreleased changes"* ]]; then
-                echo "$content_line" >> temp_changelog
-              fi
-            done < <(tail -n +2 "${{ inputs.changelog_file }")
-            in_unreleased=true
-          elif ! $in_unreleased; then
-            echo "$line" >> temp_changelog
-          fi
-        done < "${{ inputs.changelog_file }}"
+        # Create temporary changelog
+        {
+          echo "# Changelog"
+          echo ""
+          echo "## [Unreleased]"
+          echo ""
+          echo "### Added"
+          echo "- No unreleased changes"
+          echo ""
+          echo "## [${NEW_VERSION}] - ${current_date}"
+          
+          # Extract and insert current unreleased content
+          awk '/^## \[Unreleased\]/{p=1;next} /^## \[/{p=0} p' "${{ inputs.changelog_file }}" | \
+          grep -v "^### Added" | grep -v "^- No unreleased changes" | grep -v "^$"
+          
+          # Add rest of the changelog
+          sed -n '/^## \[[0-9]/,$p' "${{ inputs.changelog_file }}"
+        } > temp_changelog
         
         mv temp_changelog "${{ inputs.changelog_file }}"
         
