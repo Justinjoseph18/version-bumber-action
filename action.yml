@@ -91,11 +91,25 @@ runs:
 
     - name: Extract release notes
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      uses: ffurrer2/extract-release-notes@v2
-      id: extract_notes
-      with:
-        changelog_file: ${{ inputs.changelog_file }}
-        prerelease: 'false'
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.changelog_file }}" ]; then
+          # Extract content between the first and second heading
+          awk '/^## / { if (count == 0) {count++; next} if (count == 1) {exit} else {print} }' "${{ inputs.changelog_file }}" > release_notes.txt
+          # If no content was found between headings, take everything after the first heading
+          if [ ! -s release_notes.txt ]; then
+            awk '/^## / {if (count == 0) {count++; next} print}' "${{ inputs.changelog_file }}" > release_notes.txt
+          fi
+          # Store release notes in environment variable and output
+          RELEASE_NOTES=$(cat release_notes.txt)
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+          echo "$RELEASE_NOTES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          echo "release_notes=$RELEASE_NOTES" >> $GITHUB_OUTPUT
+        else
+          echo "No changelog file found at ${{ inputs.changelog_file }}"
+          exit 1
+        fi
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -109,7 +123,6 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
-        RELEASE_NOTES: ${{ steps.extract_notes.outputs.release_notes }}
       run: |
         # Create JSON payload for the release
         jq -n \
