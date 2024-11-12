@@ -108,24 +108,11 @@ runs:
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
         echo "Calculated new version: v$NEW_VERSION"
 
-        # Configure git with full error logging
-        set -x
+        # Configure git
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
 
-        # Create and push tag with error handling
-        echo "Creating tag v$NEW_VERSION..."
-        if ! git tag "v$NEW_VERSION"; then
-          echo "Failed to create tag"
-          exit 1
-        fi
-
-        echo "Pushing tag to remote..."
-        if ! git push origin "v$NEW_VERSION" --force; then
-          echo "Failed to push tag"
-          git tag -d "v$NEW_VERSION"
-          exit 1
-        fi
-
-        echo "Tag v$NEW_VERSION successfully created and pushed"
-        set +x
+        # Create and push tag with explicit ref
+        echo "Creating and pushing tag v$NEW_VERSION..."
+        git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+        git push origin refs/tags/v$NEW_VERSION --force
