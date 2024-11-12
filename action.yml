@@ -46,7 +46,7 @@ runs:
       shell: bash
       id: get-latest-tag
       run: |
-        git fetch --tags
+        git fetch --tags --force
         LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
         # Priority order: git tag > package.json > .version file > default
         if [ ! -z "$LATEST_TAG" ]; then
@@ -58,12 +58,16 @@ runs:
         else
           echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
         fi
+        
+        echo "Current latest tag: $LATEST_TAG"
  
     - name: Determine version bump
       shell: bash
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
+        echo "Processing PR title: $PR_TITLE"
+        
         # First check for breaking changes
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
           echo "BUMP=major" >> $GITHUB_ENV
@@ -76,16 +80,18 @@ runs:
         else
           echo "BUMP=none" >> $GITHUB_ENV
         fi
-        # Debug output
-        echo "PR Title: $PR_TITLE"
-        echo "Bump Type: $BUMP"
+        
+        echo "Determined bump type: $BUMP"
  
     - name: Bump version and create tag
       if: env.BUMP != 'none'
       shell: bash
       id: bump-version
       run: |
+        echo "Starting version bump process..."
         CURRENT_VERSION=${LATEST_TAG#v}
+        echo "Current version: $CURRENT_VERSION"
+        
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
         case $BUMP in
           major)
@@ -98,14 +104,28 @@ runs:
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
             ;;
         esac
+        
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-        echo "New version: v$NEW_VERSION"
+        echo "Calculated new version: v$NEW_VERSION"
 
-        # Configure git
+        # Configure git with full error logging
+        set -x
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
 
-        # Create and push tag
+        # Create and push tag with error handling
         echo "Creating tag v$NEW_VERSION..."
-        git tag "v$NEW_VERSION"
-        git push origin "v$NEW_VERSION"
+        if ! git tag "v$NEW_VERSION"; then
+          echo "Failed to create tag"
+          exit 1
+        fi
+
+        echo "Pushing tag to remote..."
+        if ! git push origin "v$NEW_VERSION" --force; then
+          echo "Failed to push tag"
+          git tag -d "v$NEW_VERSION"
+          exit 1
+        fi
+
+        echo "Tag v$NEW_VERSION successfully created and pushed"
+        set +x
