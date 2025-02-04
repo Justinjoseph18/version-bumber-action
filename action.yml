@@ -7,6 +7,10 @@ inputs:
   initial_version:
     description: 'Initial version to start from (from secrets)'
     required: true
+  force_initial:
+    description: 'Force use of initial version regardless of existing tags'
+    required: false
+    default: 'true'
   draft:
     description: 'Create release as draft'
     required: false
@@ -23,33 +27,35 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Setup initial version
+    - name: Set current version
       shell: bash
+      id: set-version
       run: |
-        echo "INITIAL_VERSION=${{ inputs.initial_version }}" >> $GITHUB_ENV
-        echo "Initial version set to: ${{ inputs.initial_version }}"
-
-    - name: Get current version
-      shell: bash
-      id: get-version
-      run: |
-        echo "Fetching tags..."
-        git fetch --tags --force
+        # Log inputs for debugging
+        echo "Initial version from input: ${{ inputs.initial_version }}"
+        echo "Force initial: ${{ inputs.force_initial }}"
         
-        # Try to get the latest tag
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        echo "Latest git tag found: ${LATEST_TAG}"
-        
-        # If no tag exists, use initial version
-        if [ -z "$LATEST_TAG" ]; then
-          echo "No existing tags found, using initial version: $INITIAL_VERSION"
-          echo "CURRENT_VERSION=$INITIAL_VERSION" >> $GITHUB_ENV
+        # Check if we should force initial version
+        if [[ "${{ inputs.force_initial }}" == "true" ]]; then
+          echo "Forcing use of initial version: ${{ inputs.initial_version }}"
+          echo "CURRENT_VERSION=${{ inputs.initial_version }}" >> $GITHUB_ENV
         else
-          # Remove 'v' prefix if it exists
-          CURRENT_VERSION=${LATEST_TAG#v}
-          echo "Using existing version: $CURRENT_VERSION"
-          echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
+          # Try to get existing version from git tags
+          git fetch --tags --force
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No existing tags found, using initial version: ${{ inputs.initial_version }}"
+            echo "CURRENT_VERSION=${{ inputs.initial_version }}" >> $GITHUB_ENV
+          else
+            # Remove 'v' prefix if it exists
+            CURRENT_VERSION=${LATEST_TAG#v}
+            echo "Using existing version: $CURRENT_VERSION"
+            echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
+          fi
         fi
+        
+        echo "Selected current version: $CURRENT_VERSION"
 
     - name: Determine version bump
       shell: bash
@@ -80,10 +86,11 @@ runs:
       shell: bash
       id: calc-version
       run: |
-        echo "Current version: $CURRENT_VERSION"
+        echo "Starting version: $CURRENT_VERSION"
         
         # Split version into major, minor, patch
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+        echo "Current parts - Major: $MAJOR, Minor: $MINOR, Patch: $PATCH"
         
         # Calculate new version
         case $BUMP in
