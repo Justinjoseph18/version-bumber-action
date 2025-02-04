@@ -2,7 +2,7 @@ name: 'Automatic Version Bumper'
 description: 'Automatically bumps version and creates releases based on PR title conventions'
 inputs:
   token:
-    description: 'GitHub token for creating releases and updating secrets'
+    description: 'GitHub token for creating releases'
     required: true
   initial_version:
     description: 'Initial version to start from (from secrets)'
@@ -112,14 +112,10 @@ runs:
         echo "Pushing tag to repository..."
         git push origin "v$NEW_VERSION" --force
 
-    - name: Update version in repository secrets
+    - name: Update Initial Version Secret
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
-      shell: bash
-      env:
-        GITHUB_TOKEN: ${{ inputs.token }}
-        GH_TOKEN: ${{ inputs.token }}
-      run: |
-        # Use GitHub CLI to update secret
-        gh secret set INITIAL_VERSION "$NEW_VERSION"
-        
-        echo "Updated INITIAL_VERSION secret to $NEW_VERSION"
+      uses: gliech/create-github-secret-action@v1
+      with:
+        name: INITIAL_VERSION
+        value: ${{ env.NEW_VERSION }}
+        pa_token: ${{ inputs.token }}
