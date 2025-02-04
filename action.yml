@@ -129,9 +129,6 @@ runs:
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         # Update the version in repository secrets
-        # This uses GitHub CLI to update the initial_version secret
-        gh secret set INITIAL_VERSION "$NEW_VERSION" \
-          --repo ${{ github.repository }} \
-          --body "$NEW_VERSION"
+        gh secret set INITIAL_VERSION "$NEW_VERSION"
         
         echo "Updated INITIAL_VERSION secret to $NEW_VERSION"
