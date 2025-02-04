@@ -5,6 +5,9 @@ inputs:
     description: 'GitHub token for creating releases'
     required: true
     default: ${{ github.token }}
+  initial_version:
+    description: 'Initial version to start from (from secrets)'
+    required: true
   draft:
     description: 'Create release as draft'
     required: false
@@ -13,12 +16,11 @@ inputs:
     description: 'Mark as prerelease'
     required: false
     default: 'false'
-
 outputs:
   new_version:
     description: 'The new version number'
     value: ${{ env.NEW_VERSION }}
- 
+
 runs:
   using: 'composite'
   steps:
@@ -31,7 +33,7 @@ runs:
           echo "PACKAGE_VERSION=v${VERSION}" >> $GITHUB_ENV
         fi
       continue-on-error: true
- 
+
     - name: Get version from .version file
       shell: bash
       id: version-file
@@ -41,14 +43,15 @@ runs:
           echo "FILE_VERSION=v${VERSION}" >> $GITHUB_ENV
         fi
       continue-on-error: true
- 
-    - name: Get latest tag
+
+    - name: Get latest tag or use initial version
       shell: bash
       id: get-latest-tag
       run: |
         git fetch --tags --force
         LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        # Priority order: git tag > package.json > .version file > default
+        
+        # Priority order: git tag > package.json > .version file > initial_version from secrets
         if [ ! -z "$LATEST_TAG" ]; then
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
         elif [ ! -z "$PACKAGE_VERSION" ]; then
@@ -56,11 +59,12 @@ runs:
         elif [ ! -z "$FILE_VERSION" ]; then
           echo "LATEST_TAG=$FILE_VERSION" >> $GITHUB_ENV
         else
-          echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
+          # Use the initial version from secrets if no existing version is found
+          echo "LATEST_TAG=v${{ inputs.initial_version }}" >> $GITHUB_ENV
         fi
         
         echo "Current latest tag: $LATEST_TAG"
- 
+
     - name: Determine version bump
       shell: bash
       id: version-bump
@@ -82,7 +86,7 @@ runs:
         fi
         
         echo "Determined bump type: $BUMP"
- 
+
     - name: Bump version and create tag
       if: env.BUMP != 'none'
       shell: bash
@@ -107,11 +111,11 @@ runs:
         
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
         echo "Calculated new version: v$NEW_VERSION"
-
+        
         # Configure git
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-
+        
         # Create and push tag with explicit ref
         echo "Creating and pushing tag v$NEW_VERSION..."
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
