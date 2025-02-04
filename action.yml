@@ -118,4 +118,4 @@ runs:
       with:
         name: INITIAL_VERSION
         value: ${{ env.NEW_VERSION }}
-        pa_token: ${{ inputs.token }}
+        pa_token: ${{ secrets.PAT }}
