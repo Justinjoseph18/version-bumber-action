@@ -117,9 +117,9 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ inputs.token }}
       run: |
-        # Directly use NEW_VERSION from environment
-        echo "$NEW_VERSION" > version.txt
-        gh secret set INITIAL_VERSION < version.txt
+        # Use GitHub CLI to update secret
+        gh secret set INITIAL_VERSION "$NEW_VERSION"
         
         echo "Updated INITIAL_VERSION secret to $NEW_VERSION"
