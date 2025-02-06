@@ -59,14 +59,26 @@ runs:
         
         echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
 
-    - name: Extract Release Notes
+    - name: Extract and Format Release Notes
       shell: bash
       id: release-notes
       run: |
-        RELEASE_NOTES=$(awk '/^## v'"${{ steps.bump-version.outputs.version }}"'/ {flag=1; next} /^## / {flag=0} flag' CHANGE_LOG.md)
+        # Create a temporary file for the release notes
+        echo "### Breaking Changes" > temp_notes.md
+        grep "^- .*breaking.*" CHANGELOG.md >> temp_notes.md || true
+        
+        echo -e "\n### Features" >> temp_notes.md
+        grep "^- .*feat.*" CHANGELOG.md >> temp_notes.md || true
+        
+        echo -e "\n### Fixes" >> temp_notes.md
+        grep "^- .*fix.*" CHANGELOG.md >> temp_notes.md || true
+        
+        # Store the formatted release notes in an environment variable
+        FORMATTED_NOTES=$(cat temp_notes.md)
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        echo "$RELEASE_NOTES" >> $GITHUB_ENV
+        echo "$FORMATTED_NOTES" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
+        rm temp_notes.md
 
     - name: Commit and push tag
       shell: bash
@@ -74,7 +86,7 @@ runs:
         if [ "$BUMP" != "none" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Modified this line to only include the version number in the tag message
-          git tag -a "v${{ steps.bump-version.outputs.version }}" -m "${{ steps.bump-version.outputs.version }}"
+          # Include version number and release notes in the tag message
+          git tag -a "v${{ steps.bump-version.outputs.version }}" -m "${{ steps.bump-version.outputs.version }}" -m "${{ env.RELEASE_NOTES }}"
           git push origin "v${{ steps.bump-version.outputs.version }}" --force
         fi
