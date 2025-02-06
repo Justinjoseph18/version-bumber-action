@@ -1,111 +1,57 @@
 name: 'Automatic Version Bumper'
-description: 'Automatically bumps version and creates releases based on PR title conventions'
+description: 'Automatically bumps version and updates GitHub Secrets'
 inputs:
   token:
-    description: 'GitHub token for creating releases'
+    description: 'GitHub token for authentication'
     required: true
-    default: ${{ github.token }}
-  draft:
-    description: 'Create release as draft'
-    required: false
-    default: 'false'
-  prerelease:
-    description: 'Mark as prerelease'
-    required: false
-    default: 'false'
+  initial_version:
+    description: 'Initial version from GitHub secrets'
+    required: true
 outputs:
   new_version:
     description: 'The new version number'
     value: ${{ env.NEW_VERSION }}
- 
+
 runs:
   using: 'composite'
   steps:
-    - name: Get version from package.json
+    - name: Get initial version
       shell: bash
-      id: package-version
+      id: get-initial-version
       run: |
-        if [ -f package.json ]; then
-          VERSION=$(node -p "require('./package.json').version")
-          echo "PACKAGE_VERSION=v${VERSION}" >> $GITHUB_ENV
-        fi
-      continue-on-error: true
- 
-    - name: Get version from .version file
-      shell: bash
-      id: version-file
-      run: |
-        if [ -f .version ]; then
-          VERSION=$(cat .version)
-          echo "FILE_VERSION=v${VERSION}" >> $GITHUB_ENV
-        fi
-      continue-on-error: true
- 
-    - name: Get latest tag or use initial version
-      shell: bash
-      id: get-latest-tag
-      run: |
-        git fetch --tags --force
-        
-        # Check for INITIAL_VERSION secret
-        if [ ! -z "${{ secrets.INITIAL_VERSION }}" ]; then
-          echo "Using INITIAL_VERSION from secret"
-          INITIAL_VERSION="${{ secrets.INITIAL_VERSION }}"
-          # Ensure it starts with v if not already
-          if [[ ! $INITIAL_VERSION =~ ^v ]]; then
-            INITIAL_VERSION="v${INITIAL_VERSION}"
-          fi
-          echo "LATEST_TAG=$INITIAL_VERSION" >> $GITHUB_ENV
-        else
-          # Existing tag retrieval logic
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
-          # Priority order: git tag > package.json > .version file > default
-          if [ ! -z "$LATEST_TAG" ]; then
-            echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          elif [ ! -z "$PACKAGE_VERSION" ]; then
-            echo "LATEST_TAG=$PACKAGE_VERSION" >> $GITHUB_ENV
-          elif [ ! -z "$FILE_VERSION" ]; then
-            echo "LATEST_TAG=$FILE_VERSION" >> $GITHUB_ENV
-          else
-            echo "LATEST_TAG=v0.0.0" >> $GITHUB_ENV
-          fi
-        fi
-        
-        echo "Current latest tag: $LATEST_TAG"
- 
+        VERSION="${{ inputs.initial_version }}"
+        echo "LATEST_TAG=$VERSION" >> $GITHUB_ENV
+        echo "Initial version: $VERSION"
+
     - name: Determine version bump
       shell: bash
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
         echo "Processing PR title: $PR_TITLE"
-        
-        # First check for breaking changes
-        if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
+
+        # Determine bump type
+        if [[ $PR_TITLE =~ ^feat! ]]; then
           echo "BUMP=major" >> $GITHUB_ENV
-        # Then check for features
-        elif [[ $PR_TITLE =~ ^feat: ]]; then
+        elif [[ $PR_TITLE =~ ^feat ]]; then
           echo "BUMP=minor" >> $GITHUB_ENV
-        # Then check for fixes
-        elif [[ $PR_TITLE =~ ^fix: ]]; then
+        elif [[ $PR_TITLE =~ ^fix ]]; then
           echo "BUMP=patch" >> $GITHUB_ENV
         else
           echo "BUMP=none" >> $GITHUB_ENV
         fi
-        
+
         echo "Determined bump type: $BUMP"
- 
+
     - name: Bump version and create tag
       if: env.BUMP != 'none'
       shell: bash
       id: bump-version
       run: |
         echo "Starting version bump process..."
-        CURRENT_VERSION=${LATEST_TAG#v}
-        echo "Current version: $CURRENT_VERSION"
-        
+        CURRENT_VERSION=${LATEST_TAG}
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
         case $BUMP in
           major)
             NEW_VERSION="$((MAJOR + 1)).0.0"
@@ -117,13 +63,19 @@ runs:
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
             ;;
         esac
-        
+
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-        echo "Calculated new version: v$NEW_VERSION"
-        # Configure git
+        echo "Calculated new version: $NEW_VERSION"
+
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        # Create and push tag with explicit ref
-        echo "Creating and pushing tag v$NEW_VERSION..."
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
         git push origin refs/tags/v$NEW_VERSION --force
+
+    - name: Update GitHub Secret with New Version
+      shell: bash
+      run: |
+        echo "Updating GitHub Secret with new version: $NEW_VERSION"
+        gh secret set INITIAL_VERSION --body "$NEW_VERSION" --repo $GITHUB_REPOSITORY
+      env:
+        GH_TOKEN: ${{ inputs.token }}
