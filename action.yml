@@ -89,11 +89,18 @@ runs:
       if: env.BUMP != 'none'
       shell: bash
       run: |
-        # Create GitHub release
-        gh release create "v$NEW_VERSION" \
-          --title "Release v$NEW_VERSION" \
-          --notes "Automated release based on PR title" \
-          ${{ inputs.draft == 'true' && '--draft' || '' }} \
-          ${{ inputs.prerelease == 'true' && '--prerelease' || '' }}
+        # Check if release already exists
+        EXISTING_RELEASE=$(gh release list --json tagName --jq ".[] | select(.tagName == \"v$NEW_VERSION\")")
+        
+        if [ -z "$EXISTING_RELEASE" ]; then
+          # Create GitHub release only if it doesn't exist
+          gh release create "v$NEW_VERSION" \
+            --title "Release v$NEW_VERSION" \
+            --notes "Automated release based on PR title" \
+            ${{ inputs.draft == 'true' && '--draft' || '' }} \
+            ${{ inputs.prerelease == 'true' && '--prerelease' || '' }}
+        else
+          echo "Release v$NEW_VERSION already exists. Skipping release creation."
+        fi
       env:
         GH_TOKEN: ${{ inputs.token }}
