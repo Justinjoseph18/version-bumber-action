@@ -1,97 +1,49 @@
-name: 'Automatic Version Bumper'
-description: 'Automatically bumps version and creates releases based on PR title conventions'
+```yaml
+name: 'Advanced Version Bumper'
+description: 'Semantic versioning with GitHub Secrets storage'
 inputs:
-  token:
-    description: 'GitHub token for creating releases'
-    required: true
-    default: ${{ github.token }}
   initial_version:
-    description: 'Initial version to use if no previous version is found'
+    description: 'Initial version to start from'
     required: false
-    default: '0.0.0'
-outputs:
-  new_version:
-    description: 'The new version number'
-    value: ${{ steps.version-bump.outputs.NEW_VERSION }}
+    default: '23.0.0'
 
 runs:
   using: 'composite'
   steps:
-    - name: Get current version
-      id: get-current-version
-      shell: bash
-      run: |
-        # Prioritize initial version input
-        INITIAL_VERSION="${{ inputs.initial_version }}"
-        
-        # Check if .version file exists, use it if present
-        FILE_VERSION=""
-        if [ -f .version ]; then
-          FILE_VERSION=$(cat .version)
-        fi
-        
-        # Determine which version to use
-        CURRENT_VERSION="${FILE_VERSION:-$INITIAL_VERSION}"
-        
-        echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-        echo "Using current version: $CURRENT_VERSION"
- 
-    - name: Determine version bump
+    - name: Bump Version
       id: version-bump
       shell: bash
       run: |
-        CURRENT_VERSION="${{ steps.get-current-version.outputs.CURRENT_VERSION }}"
+        # Get current version from GitHub Secrets or input
+        CURRENT_VERSION="${{ inputs.initial_version }}"
+        
+        # Determine PR type
         PR_TITLE="${{ github.event.pull_request.title }}"
-        echo "Processing PR title: $PR_TITLE"
         
-        # Parse current version
+        # Split version
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-        
-        # Determine bump type and new version
-        if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
+
+        # Version bump logic
+        if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^BREAKING ]]; then
           NEW_VERSION="$((MAJOR + 1)).0.0"
-          BUMP="major"
         elif [[ $PR_TITLE =~ ^feat: ]]; then
-          NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-          BUMP="minor"
+          # If last bump was major, increment minor
+          if [[ "$MAJOR" != "23" ]]; then
+            NEW_VERSION="${MAJOR}.1.0"
+          else
+            NEW_VERSION="$((MAJOR + 1)).0.0"
+          fi
         elif [[ $PR_TITLE =~ ^fix: ]]; then
           NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-          BUMP="patch"
         else
           NEW_VERSION="$CURRENT_VERSION"
-          BUMP="none"
         fi
-        
-        echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
-        echo "BUMP=$BUMP" >> $GITHUB_OUTPUT
-        echo "Determined new version: $NEW_VERSION"
- 
-    - name: Update version file
-      if: steps.version-bump.outputs.BUMP != 'none'
-      shell: bash
-      run: |
-        NEW_VERSION="${{ steps.version-bump.outputs.NEW_VERSION }}"
-        echo "$NEW_VERSION" > .version
-        
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        git add .version
-        git commit -m "Bump version to $NEW_VERSION"
-        git push
- 
-    - name: Update GitHub Secret
-      if: steps.version-bump.outputs.BUMP != 'none'
-      shell: bash
-      run: |
-        NEW_VERSION="${{ steps.version-bump.outputs.NEW_VERSION }}"
-        
-        # Get the public key for secret encryption
+
+        # Update GitHub Secret
         PUBLIC_KEY_RESPONSE=$(gh api /repos/${{ github.repository }}/actions/secrets/public-key)
         PUBLIC_KEY=$(echo "$PUBLIC_KEY_RESPONSE" | jq -r .key)
         KEY_ID=$(echo "$PUBLIC_KEY_RESPONSE" | jq -r .key_id)
         
-        # Encrypt the new version
         ENCRYPTED_VALUE=$(echo -n "$NEW_VERSION" | base64 | xargs -0 python3 -c "
 import base64
 import nacl
@@ -107,30 +59,16 @@ encrypted = sealed_box.encrypt(message.encode('utf-8'))
 print(base64.b64encode(encrypted).decode('utf-8'))
 ")
         
-        # Update the secret
+        # Update secret
         gh api --method PUT \
           -H "Accept: application/vnd.github+json" \
-          /repos/${{ github.repository }}/actions/secrets/INITIAL_VERSION \
+          /repos/${{ github.repository }}/actions/secrets/CURRENT_VERSION \
           -f encrypted_value="$ENCRYPTED_VALUE" \
           -f key_id="$KEY_ID"
-      env:
-        GH_TOKEN: ${{ github.token }}
- 
-    - name: Create GitHub Release
-      if: steps.version-bump.outputs.BUMP != 'none'
-      shell: bash
-      run: |
-        NEW_VERSION="${{ steps.version-bump.outputs.NEW_VERSION }}"
-        # Check if release already exists
-        EXISTING_RELEASE=$(gh release list --json tagName --jq ".[] | select(.tagName == \"v$NEW_VERSION\")")
         
-        if [ -z "$EXISTING_RELEASE" ]; then
-          # Create GitHub release only if it doesn't exist
-          gh release create "v$NEW_VERSION" \
-            --title "Release v$NEW_VERSION" \
-            --notes "Automated release based on PR title"
-        else
-          echo "Release v$NEW_VERSION already exists. Skipping release creation."
-        fi
+        # Output and store new version
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "$NEW_VERSION" > .version
       env:
         GH_TOKEN: ${{ github.token }}
+```
