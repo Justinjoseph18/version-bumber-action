@@ -9,18 +9,6 @@ inputs:
     description: 'Initial version to use if no previous version is found'
     required: false
     default: '0.0.0'
-  draft:
-    description: 'Create release as draft'
-    required: false
-    default: 'false'
-  prerelease:
-    description: 'Mark as prerelease'
-    required: false
-    default: 'false'
-outputs:
-  new_version:
-    description: 'The new version number'
-    value: ${{ env.NEW_VERSION }}
  
 runs:
   using: 'composite'
@@ -29,12 +17,21 @@ runs:
       shell: bash
       id: get-current-version
       run: |
+        # Prioritize initial version input
+        INITIAL_VERSION="${{ inputs.initial_version }}"
+        
         # Check if .version file exists, use it if present
         if [ -f .version ]; then
-          CURRENT_VERSION=$(cat .version)
-        else
-          CURRENT_VERSION="${{ inputs.initial_version }}"
+          FILE_VERSION=$(cat .version)
         fi
+        
+        # Determine which version to use
+        if [ ! -z "$FILE_VERSION" ]; then
+          CURRENT_VERSION="$FILE_VERSION"
+        else
+          CURRENT_VERSION="$INITIAL_VERSION"
+        fi
+        
         echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
         echo "Using current version: $CURRENT_VERSION"
  
@@ -43,7 +40,6 @@ runs:
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
-        CURRENT_VERSION="${CURRENT_VERSION}"
         echo "Processing PR title: $PR_TITLE"
         
         # First check for breaking changes (MAJOR version bump)
@@ -85,6 +81,40 @@ runs:
         git commit -m "Bump version to $NEW_VERSION"
         git push
  
+    - name: Update GitHub Secret
+      if: env.BUMP != 'none'
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      shell: bash
+      run: |
+        # Get the public key for secret encryption
+        PUBLIC_KEY_RESPONSE=$(gh api /repos/${{ github.repository }}/actions/secrets/public-key)
+        PUBLIC_KEY=$(echo "$PUBLIC_KEY_RESPONSE" | jq -r .key)
+        KEY_ID=$(echo "$PUBLIC_KEY_RESPONSE" | jq -r .key_id)
+        
+        # Encrypt the new version
+        ENCRYPTED_VALUE=$(echo -n "$NEW_VERSION" | base64 | xargs -0 python3 -c "
+import base64
+import nacl
+import nacl.encoding
+import nacl.public
+
+public_key = '$PUBLIC_KEY'
+message = '$NEW_VERSION'
+
+public_key = nacl.public.PublicKey(base64.b64decode(public_key), nacl.encoding.Base64Encoder())
+sealed_box = nacl.public.SealedBox(public_key)
+encrypted = sealed_box.encrypt(message.encode('utf-8'))
+print(base64.b64encode(encrypted).decode('utf-8'))
+")
+        
+        # Update the secret
+        gh api --method PUT \
+          -H "Accept: application/vnd.github+json" \
+          /repos/${{ github.repository }}/actions/secrets/INITIAL_VERSION \
+          -f encrypted_value="$ENCRYPTED_VALUE" \
+          -f key_id="$KEY_ID"
+ 
     - name: Create GitHub Release
       if: env.BUMP != 'none'
       shell: bash
@@ -96,9 +126,7 @@ runs:
           # Create GitHub release only if it doesn't exist
           gh release create "v$NEW_VERSION" \
             --title "Release v$NEW_VERSION" \
-            --notes "Automated release based on PR title" \
-            ${{ inputs.draft == 'true' && '--draft' || '' }} \
-            ${{ inputs.prerelease == 'true' && '--prerelease' || '' }}
+            --notes "Automated release based on PR title"
         else
           echo "Release v$NEW_VERSION already exists. Skipping release creation."
         fi
