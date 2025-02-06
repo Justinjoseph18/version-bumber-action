@@ -9,13 +9,17 @@ inputs:
     description: 'Initial version to use if no previous version is found'
     required: false
     default: '0.0.0'
- 
+outputs:
+  new_version:
+    description: 'The new version number'
+    value: ${{ steps.version-bump.outputs.NEW_VERSION }}
+
 runs:
   using: 'composite'
   steps:
     - name: Get current version
-      shell: bash
       id: get-current-version
+      shell: bash
       run: |
         # Prioritize initial version input
         INITIAL_VERSION="${{ inputs.initial_version }}"
@@ -32,13 +36,14 @@ runs:
           CURRENT_VERSION="$INITIAL_VERSION"
         fi
         
-        echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
+        echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
         echo "Using current version: $CURRENT_VERSION"
  
     - name: Determine version bump
-      shell: bash
       id: version-bump
+      shell: bash
       run: |
+        CURRENT_VERSION="${{ steps.get-current-version.outputs.CURRENT_VERSION }}"
         PR_TITLE="${{ github.event.pull_request.title }}"
         echo "Processing PR title: $PR_TITLE"
         
@@ -46,30 +51,32 @@ runs:
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           NEW_VERSION="$((MAJOR + 1)).0.0"
-          echo "BUMP=major" >> $GITHUB_ENV
+          BUMP="major"
         # Then check for features (MINOR version bump)
         elif [[ $PR_TITLE =~ ^feat: ]]; then
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-          echo "BUMP=minor" >> $GITHUB_ENV
+          BUMP="minor"
         # Then check for fixes (PATCH version bump)
         elif [[ $PR_TITLE =~ ^fix: ]]; then
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-          echo "BUMP=patch" >> $GITHUB_ENV
+          BUMP="patch"
         else
           NEW_VERSION="$CURRENT_VERSION"
-          echo "BUMP=none" >> $GITHUB_ENV
+          BUMP="none"
         fi
         
-        echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+        echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "BUMP=$BUMP" >> $GITHUB_OUTPUT
         echo "Determined new version: $NEW_VERSION"
  
     - name: Update version file
-      if: env.BUMP != 'none'
+      if: steps.version-bump.outputs.BUMP != 'none'
       shell: bash
       run: |
         # Update .version file with new version
+        NEW_VERSION="${{ steps.version-bump.outputs.NEW_VERSION }}"
         echo "$NEW_VERSION" > .version
         
         # Configure git
@@ -82,11 +89,11 @@ runs:
         git push
  
     - name: Update GitHub Secret
-      if: env.BUMP != 'none'
-      env:
-        GH_TOKEN: ${{ inputs.token }}
+      if: steps.version-bump.outputs.BUMP != 'none'
       shell: bash
       run: |
+        NEW_VERSION="${{ steps.version-bump.outputs.NEW_VERSION }}"
+        
         # Get the public key for secret encryption
         PUBLIC_KEY_RESPONSE=$(gh api /repos/${{ github.repository }}/actions/secrets/public-key)
         PUBLIC_KEY=$(echo "$PUBLIC_KEY_RESPONSE" | jq -r .key)
@@ -114,11 +121,14 @@ print(base64.b64encode(encrypted).decode('utf-8'))
           /repos/${{ github.repository }}/actions/secrets/INITIAL_VERSION \
           -f encrypted_value="$ENCRYPTED_VALUE" \
           -f key_id="$KEY_ID"
+      env:
+        GH_TOKEN: ${{ github.token }}
  
     - name: Create GitHub Release
-      if: env.BUMP != 'none'
+      if: steps.version-bump.outputs.BUMP != 'none'
       shell: bash
       run: |
+        NEW_VERSION="${{ steps.version-bump.outputs.NEW_VERSION }}"
         # Check if release already exists
         EXISTING_RELEASE=$(gh release list --json tagName --jq ".[] | select(.tagName == \"v$NEW_VERSION\")")
         
@@ -131,4 +141,4 @@ print(base64.b64encode(encrypted).decode('utf-8'))
           echo "Release v$NEW_VERSION already exists. Skipping release creation."
         fi
       env:
-        GH_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ github.token }}
