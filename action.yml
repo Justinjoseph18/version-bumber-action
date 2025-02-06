@@ -24,9 +24,6 @@ jobs:
         INITIAL_VERSION: ${{ secrets.INITIAL_VERSION }}
       shell: bash
       run: |
-        # Log inputs for debugging
-        echo "Initial version from secret: $INITIAL_VERSION"
-        
         # Fetch all tags
         git fetch --tags --force
         
@@ -34,7 +31,6 @@ jobs:
         LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
         
         if [ -z "$LATEST_TAG" ]; then
-          echo "Using initial version from secret: $INITIAL_VERSION"
           CURRENT_VERSION=$INITIAL_VERSION
         else
           # Remove 'v' prefix if it exists
@@ -42,40 +38,31 @@ jobs:
         fi
         
         echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
-        echo "Selected current version: $CURRENT_VERSION"
 
     - name: Determine version bump
       shell: bash
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
-        echo "Processing PR title: $PR_TITLE"
         
-        # First check for breaking changes
+        # Check for breaking changes (major version bump)
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
           echo "BUMP=major" >> $GITHUB_ENV
-          echo "Determined MAJOR version bump"
-        # Then check for features
+        # Check for new features (minor version bump)
         elif [[ $PR_TITLE =~ ^feat: ]]; then
           echo "BUMP=minor" >> $GITHUB_ENV
-          echo "Determined MINOR version bump"
-        # Then check for fixes
+        # Check for bug fixes (patch version bump)
         elif [[ $PR_TITLE =~ ^fix: ]]; then
           echo "BUMP=patch" >> $GITHUB_ENV
-          echo "Determined PATCH version bump"
         else
           echo "BUMP=none" >> $GITHUB_ENV
-          echo "No version bump needed"
         fi
 
     - name: Calculate new version
       if: env.BUMP != 'none'
       shell: bash
       run: |
-        echo "Starting version: $CURRENT_VERSION"
-        
         # Split version into major, minor, patch
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-        echo "Current parts - Major: $MAJOR, Minor: $MINOR, Patch: $PATCH"
         
         # Calculate new version
         case $BUMP in
@@ -91,7 +78,6 @@ jobs:
         esac
         
         echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-        echo "Calculated new version: $NEW_VERSION"
 
     - name: Create and push tag
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
@@ -101,10 +87,7 @@ jobs:
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         
-        echo "Creating new tag v$NEW_VERSION..."
         git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-        
-        echo "Pushing tag to repository..."
         git push origin "v$NEW_VERSION" --force
 
     - name: Update Initial Version Secret
@@ -117,8 +100,6 @@ jobs:
         gh secret set INITIAL_VERSION \
           --body "$NEW_VERSION" \
           --repos "${{ github.repository }}"
-        
-        echo "Updated INITIAL_VERSION secret to $NEW_VERSION"
 
     - name: Create GitHub Release
       if: env.BUMP != 'none' && env.NEW_VERSION != ''
