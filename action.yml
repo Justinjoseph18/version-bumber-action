@@ -25,21 +25,25 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Get initial version
+    - name: Get current version
       shell: bash
-      id: get-initial-version
+      id: get-current-version
       run: |
-        # Use provided initial version or default
-        INITIAL_VERSION="${{ inputs.initial_version }}"
-        echo "INITIAL_VERSION=${INITIAL_VERSION}" >> $GITHUB_ENV
-        echo "Using initial version: $INITIAL_VERSION"
+        # Check if .version file exists, use it if present
+        if [ -f .version ]; then
+          CURRENT_VERSION=$(cat .version)
+        else
+          CURRENT_VERSION="${{ inputs.initial_version }}"
+        fi
+        echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
+        echo "Using current version: $CURRENT_VERSION"
  
     - name: Determine version bump
       shell: bash
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
-        CURRENT_VERSION="${INITIAL_VERSION}"
+        CURRENT_VERSION="${CURRENT_VERSION}"
         echo "Processing PR title: $PR_TITLE"
         
         # First check for breaking changes (MAJOR version bump)
