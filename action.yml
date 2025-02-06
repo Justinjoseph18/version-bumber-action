@@ -25,16 +25,13 @@ runs:
         INITIAL_VERSION="${{ inputs.initial_version }}"
         
         # Check if .version file exists, use it if present
+        FILE_VERSION=""
         if [ -f .version ]; then
           FILE_VERSION=$(cat .version)
         fi
         
         # Determine which version to use
-        if [ ! -z "$FILE_VERSION" ]; then
-          CURRENT_VERSION="$FILE_VERSION"
-        else
-          CURRENT_VERSION="$INITIAL_VERSION"
-        fi
+        CURRENT_VERSION="${FILE_VERSION:-$INITIAL_VERSION}"
         
         echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
         echo "Using current version: $CURRENT_VERSION"
@@ -47,19 +44,17 @@ runs:
         PR_TITLE="${{ github.event.pull_request.title }}"
         echo "Processing PR title: $PR_TITLE"
         
-        # First check for breaking changes (MAJOR version bump)
+        # Parse current version
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+        
+        # Determine bump type and new version
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           NEW_VERSION="$((MAJOR + 1)).0.0"
           BUMP="major"
-        # Then check for features (MINOR version bump)
         elif [[ $PR_TITLE =~ ^feat: ]]; then
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
           BUMP="minor"
-        # Then check for fixes (PATCH version bump)
         elif [[ $PR_TITLE =~ ^fix: ]]; then
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
           BUMP="patch"
         else
@@ -75,15 +70,12 @@ runs:
       if: steps.version-bump.outputs.BUMP != 'none'
       shell: bash
       run: |
-        # Update .version file with new version
         NEW_VERSION="${{ steps.version-bump.outputs.NEW_VERSION }}"
         echo "$NEW_VERSION" > .version
         
-        # Configure git
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         
-        # Commit and push the version file
         git add .version
         git commit -m "Bump version to $NEW_VERSION"
         git push
