@@ -59,26 +59,21 @@ runs:
         
         echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
 
-    - name: Extract and Format Release Notes
+    - name: Extract Release Notes
       shell: bash
       id: release-notes
       run: |
-        # Create a temporary file for the release notes
-        echo "### Breaking Changes" > temp_notes.md
-        grep "^- .*breaking.*" CHANGELOG.md >> temp_notes.md || true
-        
-        echo -e "\n### Features" >> temp_notes.md
-        grep "^- .*feat.*" CHANGELOG.md >> temp_notes.md || true
-        
-        echo -e "\n### Fixes" >> temp_notes.md
-        grep "^- .*fix.*" CHANGELOG.md >> temp_notes.md || true
-        
-        # Store the formatted release notes in an environment variable
-        FORMATTED_NOTES=$(cat temp_notes.md)
+        VERSION="v${{ steps.bump-version.outputs.version }}"
+        RELEASE_NOTES=$(awk "/^## ${VERSION}/ {flag=1; next} /^## / {flag=0} flag" CHANGE_LOG.md | sed '/^$/d')
+
+        # Ensure RELEASE_NOTES is properly formatted
+        if [[ -z "$RELEASE_NOTES" ]]; then
+          RELEASE_NOTES="No release notes found for ${VERSION}"
+        fi
+
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        echo "$FORMATTED_NOTES" >> $GITHUB_ENV
+        echo "$RELEASE_NOTES" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
-        rm temp_notes.md
 
     - name: Commit and push tag
       shell: bash
@@ -86,7 +81,10 @@ runs:
         if [ "$BUMP" != "none" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Include version number and release notes in the tag message
-          git tag -a "v${{ steps.bump-version.outputs.version }}" -m "${{ steps.bump-version.outputs.version }}" -m "${{ env.RELEASE_NOTES }}"
-          git push origin "v${{ steps.bump-version.outputs.version }}" --force
+          
+          TAG="v${{ steps.bump-version.outputs.version }}"
+
+          # Push tag with extracted release notes
+          git tag -a "$TAG" -m "${{ env.RELEASE_NOTES }}"
+          git push origin "$TAG" --force
         fi
