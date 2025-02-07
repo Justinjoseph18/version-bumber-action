@@ -64,7 +64,11 @@ runs:
       id: release-notes
       run: |
         RELEASE_NOTES=$(awk '/^## v'"${{ steps.bump-version.outputs.version }}"'/ {flag=1; next} /^## / {flag=0} flag' CHANGE_LOG.md)
+        
+        # Ensure proper multi-line formatting
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+        echo "## v${{ steps.bump-version.outputs.version }}" >> $GITHUB_ENV
+        echo "" >> $GITHUB_ENV
         echo "$RELEASE_NOTES" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
 
@@ -77,10 +81,10 @@ runs:
           
           TAG="v${{ steps.bump-version.outputs.version }}"
 
-          # Ensure release notes are formatted correctly
-          echo -e "## ${TAG}\n\n${{ env.RELEASE_NOTES }}" > RELEASE_NOTES.txt
+          # Store the release notes in a file for tagging
+          echo -e "${{ env.RELEASE_NOTES }}" > RELEASE_NOTES.txt
 
-          # Add the tag with formatted release notes
+          # Ensure the tag message has proper markdown formatting
           git tag -a "$TAG" -F RELEASE_NOTES.txt
           git push origin "$TAG" --force
         fi
