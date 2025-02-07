@@ -63,14 +63,7 @@ runs:
       shell: bash
       id: release-notes
       run: |
-        VERSION="v${{ steps.bump-version.outputs.version }}"
-        RELEASE_NOTES=$(awk "/^## ${VERSION}/ {flag=1; next} /^## / {flag=0} flag" CHANGE_LOG.md | sed '/^$/d')
-
-        # Ensure RELEASE_NOTES is properly formatted
-        if [[ -z "$RELEASE_NOTES" ]]; then
-          RELEASE_NOTES="No release notes found for ${VERSION}"
-        fi
-
+        RELEASE_NOTES=$(awk '/^## v'"${{ steps.bump-version.outputs.version }}"'/ {flag=1; next} /^## / {flag=0} flag' CHANGE_LOG.md)
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
         echo "$RELEASE_NOTES" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
@@ -84,7 +77,11 @@ runs:
           
           TAG="v${{ steps.bump-version.outputs.version }}"
 
-          # Push tag with extracted release notes
-          git tag -a "$TAG" -m "${{ env.RELEASE_NOTES }}"
+          # Format release notes with a proper newline after version
+          TAG_MESSAGE="## ${TAG}\n\n${{ env.RELEASE_NOTES }}"
+
+          echo -e "$TAG_MESSAGE" > RELEASE_NOTES.txt
+
+          git tag -a "$TAG" -F RELEASE_NOTES.txt
           git push origin "$TAG" --force
         fi
