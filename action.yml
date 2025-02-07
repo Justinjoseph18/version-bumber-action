@@ -77,11 +77,10 @@ runs:
           
           TAG="v${{ steps.bump-version.outputs.version }}"
 
-          # Format release notes with a proper newline after version
-          TAG_MESSAGE="## ${TAG}\n\n${{ env.RELEASE_NOTES }}"
+          # Ensure release notes are formatted correctly
+          echo -e "## ${TAG}\n\n${{ env.RELEASE_NOTES }}" > RELEASE_NOTES.txt
 
-          echo -e "$TAG_MESSAGE" > RELEASE_NOTES.txt
-
+          # Add the tag with formatted release notes
           git tag -a "$TAG" -F RELEASE_NOTES.txt
           git push origin "$TAG" --force
         fi
