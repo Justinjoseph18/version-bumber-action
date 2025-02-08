@@ -28,8 +28,7 @@ runs:
       shell: bash
       id: initial-version
       run: |
-        INITIAL_VERSION="${{ inputs.initial_version }}"
-        echo "INITIAL_VERSION=${INITIAL_VERSION}" >> $GITHUB_ENV
+        echo "INITIAL_VERSION=${{ inputs.initial_version }}" >> "$GITHUB_ENV"
 
     - name: Determine version bump
       shell: bash
@@ -37,13 +36,13 @@ runs:
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
-          echo "BUMP=major" >> $GITHUB_ENV
+          echo "BUMP=major" >> "$GITHUB_ENV"
         elif [[ $PR_TITLE =~ ^feat: ]]; then
-          echo "BUMP=minor" >> $GITHUB_ENV
+          echo "BUMP=minor" >> "$GITHUB_ENV"
         elif [[ $PR_TITLE =~ ^fix: ]]; then
-          echo "BUMP=patch" >> $GITHUB_ENV
+          echo "BUMP=patch" >> "$GITHUB_ENV"
         else
-          echo "BUMP=none" >> $GITHUB_ENV
+          echo "BUMP=none" >> "$GITHUB_ENV"
         fi
 
     - name: Bump version and create tag
@@ -52,16 +51,22 @@ runs:
       run: |
         CURRENT_VERSION="${{ inputs.initial_version }}"
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-        
+
         case $BUMP in
           major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
           minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
           patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
           none) NEW_VERSION="${CURRENT_VERSION}" ;;
         esac
-        
-        echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-        
+
+        echo "DEBUG: New version is $NEW_VERSION"
+        if [ -z "$NEW_VERSION" ]; then
+          echo "Error: NEW_VERSION is empty!" >&2
+          exit 1
+        fi
+
+        echo "version=${NEW_VERSION}" >> "$GITHUB_ENV"
+
         if [ "$BUMP" != "none" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -75,4 +80,10 @@ runs:
       run: |
         NEW_VERSION="${{ steps.bump-version.outputs.version }}"
         RELEASE_NOTES=$(awk -v version="[$NEW_VERSION]" '/^## \[/{p=0} $0 ~ version {p=1} p' CHANGELOG.md)
-        echo "release_notes=${RELEASE_NOTES}" >> $GITHUB_OUTPUT
+        
+        echo "DEBUG: Release notes extracted:"
+        echo "$RELEASE_NOTES"
+
+        echo "release_notes<<EOF" >> "$GITHUB_ENV"
+        echo "$RELEASE_NOTES" >> "$GITHUB_ENV"
+        echo "EOF" >> "$GITHUB_ENV"
