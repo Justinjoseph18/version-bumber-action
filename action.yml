@@ -63,17 +63,17 @@ runs:
       shell: bash
       id: release-notes
       run: |
-        TAG="v${{ steps.bump-version.outputs.version }}"
+        TAG="${{ steps.bump-version.outputs.version }}"  # This is just the version number
 
         # Extract release notes from CHANGE_LOG.md
         RELEASE_NOTES=$(awk '/^## '"$TAG"'/ {flag=1; next} /^## / {flag=0} flag' CHANGE_LOG.md)
 
-        # Ensure proper formatting
-        echo -e "## $TAG\n\n$RELEASE_NOTES" > RELEASE_NOTES.txt
+        # Store properly formatted release notes
+        echo -e "## v$TAG\n\n$RELEASE_NOTES" > RELEASE_NOTES.txt
 
-        # Store it as an environment variable for later use
+        # Save release notes to an environment variable
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        echo -e "## $TAG\n\n$RELEASE_NOTES" >> $GITHUB_ENV
+        echo -e "## v$TAG\n\n$RELEASE_NOTES" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
 
     - name: Commit and push tag
@@ -83,17 +83,16 @@ runs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          TAG="v${{ steps.bump-version.outputs.version }}"
-
-          # Ensure the tag message has proper markdown formatting
-          git tag -a "$TAG" -F RELEASE_NOTES.txt
-          git push origin "$TAG" --force
+          TAG="${{ steps.bump-version.outputs.version }}"  # Just the version number
+          
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
         fi
 
     - name: Create GitHub Release
       uses: actions/create-release@v1
       with:
-        tag_name: v${{ steps.bump-version.outputs.version }}
+        tag_name: ${{ steps.bump-version.outputs.version }}
         release_name: v${{ steps.bump-version.outputs.version }}
         body: ${{ env.RELEASE_NOTES }}
         draft: false
