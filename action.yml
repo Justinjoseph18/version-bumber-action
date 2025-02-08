@@ -1,5 +1,6 @@
 name: 'Automatic Version Bumper'
 description: 'Automatically bumps version and creates releases based on PR title conventions'
+
 inputs:
   token:
     description: 'GitHub token for creating releases'
@@ -11,10 +12,12 @@ inputs:
     description: 'Force use of initial version'
     required: false
     default: 'false'
+
 outputs:
   new_version:
     description: 'The new version number'
     value: ${{ steps.bump-version.outputs.version }}
+
 runs:
   using: 'composite'
   steps:
@@ -59,17 +62,19 @@ runs:
         if [ "$BUMP" != "none" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           # Extract release notes from CHANGE_LOG.md
           RELEASE_NOTES=$(awk -v version="## v${NEW_VERSION}" '/^## / {flag=0} $0 ~ version {flag=1} flag' CHANGE_LOG.md | tail -n +2)
-          
+
           if [ -z "$RELEASE_NOTES" ]; then
             RELEASE_NOTES="No specific release notes found for v${NEW_VERSION}."
           fi
           
-          echo "Release Notes for v${NEW_VERSION}:"
+          RELEASE_TITLE="v${NEW_VERSION}"
+          
+          echo "Release Notes for ${RELEASE_TITLE}:"
           echo "$RELEASE_NOTES"
           
-          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}\n\n$RELEASE_NOTES"
-          git push origin "v${NEW_VERSION}"
+          git tag -a "${RELEASE_TITLE}" -m "${RELEASE_TITLE}\n\n${RELEASE_NOTES}"
+          git push origin "${RELEASE_TITLE}"
         fi
