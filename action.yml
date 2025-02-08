@@ -1,5 +1,5 @@
 name: 'Automatic Version Bumper'
-description: 'Automatically bumps version, extracts release notes, and creates releases based on PR title conventions'
+description: 'Automatically bumps version and creates releases based on PR title conventions'
 
 inputs:
   token:
@@ -18,8 +18,8 @@ outputs:
     description: 'The new version number'
     value: ${{ steps.bump-version.outputs.version }}
   release_notes:
-    description: 'The extracted release notes'
-    value: ${{ steps.bump-version.outputs.release_notes }}
+    description: 'The release notes for the new version'
+    value: ${{ steps.extract-release-notes.outputs.release_notes }}
 
 runs:
   using: 'composite'
@@ -62,39 +62,17 @@ runs:
         
         echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
         
-        # Extract release notes from CHANGELOG.md
-        if [ -f "CHANGELOG.md" ]; then
-          # Use awk to extract the section for the new version
-          RELEASE_NOTES=$(awk -v version="## [${NEW_VERSION}]" '
-            BEGIN { found=0; buffer="" }
-            $0 ~ version { found=1; next }
-            found && /^## / { exit }
-            found { buffer = buffer $0 "\n" }
-            END { print buffer }
-          ' CHANGELOG.md)
-          
-          # Escape newlines and special characters for GitHub Actions
-          RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
-          RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
-          RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
-          
-          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-        else
-          echo "release_notes=No CHANGELOG.md found" >> $GITHUB_OUTPUT
-        fi
-        
         if [ "$BUMP" != "none" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Create an annotated tag with release notes
-          if [ -n "$RELEASE_NOTES" ]; then
-            git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}" -m "$RELEASE_NOTES"
-          else
-            git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
-          fi
-          
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
           git push origin "v${NEW_VERSION}" --force
         fi
+
+    - name: Extract release notes
+      shell: bash
+      id: extract-release-notes
+      run: |
+        NEW_VERSION="${{ steps.bump-version.outputs.version }}"
+        RELEASE_NOTES=$(awk -v version="[$NEW_VERSION]" '/^## \[/{p=0} $0 ~ version {p=1} p' CHANGELOG.md)
+        echo "release_notes=${RELEASE_NOTES}" >> $GITHUB_OUTPUT
