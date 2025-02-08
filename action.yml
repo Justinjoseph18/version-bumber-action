@@ -5,6 +5,10 @@ inputs:
   token:
     description: 'GitHub token for creating releases'
     required: true
+  changelog_file:
+    description: 'Path to the CHANGELOG file'
+    required: false
+    default: 'CHANGELOG.md'
   initial_version:
     description: 'Initial version from secrets'
     required: true
@@ -63,16 +67,31 @@ runs:
       shell: bash
       id: release-notes
       run: |
-        RELEASE_NOTES=$(awk '/^## v'"${{ steps.bump-version.outputs.version }}"'/ {flag=1; next} /^## / {flag=0} flag' CHANGE_LOG.md)
+        VERSION="v${{ steps.bump-version.outputs.version }}"
+        CHANGELOG_FILE="${{ inputs.changelog_file }}"
         
-        # Ensure proper multi-line formatting
-        {
-          echo "RELEASE_NOTES<<EOF"
-          echo "## v${{ steps.bump-version.outputs.version }}"
-          echo ""
-          echo "$RELEASE_NOTES"
-          echo "EOF"
-        } >> $GITHUB_ENV
+        if [ ! -f "$CHANGELOG_FILE" ]; then
+          echo "Changelog file not found!"
+          exit 1
+        fi
+
+        START_LINE=$(grep -n "^## ${VERSION}" "$CHANGELOG_FILE" | cut -d ':' -f 1)
+        if [[ -z "$START_LINE" ]]; then
+          echo "No release notes found for ${VERSION}"
+          exit 1
+        fi
+
+        TAIL_START=$((START_LINE + 1))
+        RELEASE_NOTES=$(tail -n +$TAIL_START "$CHANGELOG_FILE" | awk '/^## /{exit} {print}')
+
+        # Ensure a blank line after the version header
+        CLEAN_NOTES=$(echo "$RELEASE_NOTES" | sed '/./,$!d')
+
+        echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+        echo "## ${VERSION}" >> $GITHUB_ENV
+        echo "" >> $GITHUB_ENV
+        echo "$CLEAN_NOTES" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
 
     - name: Commit and push tag
       shell: bash
@@ -86,7 +105,7 @@ runs:
           # Store the release notes in a file for tagging
           echo -e "${{ env.RELEASE_NOTES }}" > RELEASE_NOTES.txt
 
-          # Ensure the tag message has proper markdown formatting
+          # Ensure proper markdown formatting
           git tag -a "$TAG" -F RELEASE_NOTES.txt
           git push origin "$TAG" --force
         fi
