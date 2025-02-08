@@ -64,14 +64,14 @@ runs:
       id: release-notes
       run: |
         VERSION="${{ steps.bump-version.outputs.version }}"
-        RELEASE_NOTES=$(awk '/^## \['"$VERSION"'\]/ {flag=1; next} /^## \[/ {flag=0} flag' CHANGE_LOG.md)
         
-        if [[ -z "$RELEASE_NOTES" ]]; then
-          RELEASE_NOTES="No release notes found for version $VERSION"
-        fi
-
-        echo -e "## [$VERSION]\n\n$RELEASE_NOTES" > RELEASE_NOTES.txt
+        # Extract release notes for the new version
+        RELEASE_NOTES=$(awk '/^\#\# \['"${VERSION}"'\]/ {flag=1; next} /^\#\# \[/ {flag=0} flag' CHANGE_LOG.md)
+        
+        # Format properly
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+        echo "## v${VERSION}" >> $GITHUB_ENV
+        echo "" >> $GITHUB_ENV
         echo "$RELEASE_NOTES" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
 
@@ -81,13 +81,13 @@ runs:
         if [ "$BUMP" != "none" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
+          
           TAG="v${{ steps.bump-version.outputs.version }}"
 
-          # Ensure release notes are properly formatted
-          echo -e "## [$TAG]\n\n${{ env.RELEASE_NOTES }}" > RELEASE_NOTES.txt
+          # Store the release notes in a file
+          echo -e "${{ env.RELEASE_NOTES }}" > RELEASE_NOTES.txt
 
-          # Create a tag with a message from the release notes
+          # Add release notes to the tag
           git tag -a "$TAG" -F RELEASE_NOTES.txt
-          git push origin "$TAG"
+          git push origin "$TAG" --force
         fi
