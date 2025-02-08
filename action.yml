@@ -73,49 +73,27 @@ runs:
         # Output the new version
         echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
         
-        # Extract release notes from CHANGELOG.md with all sections
+        # Extract release notes from CHANGELOG.md
         if [ -f "CHANGELOG.md" ]; then
-          # Create a temporary file for release notes
-          TEMP_NOTES=$(mktemp)
+          echo "Found CHANGELOG.md file"
           
-          # Initialize variables for section tracking
-          FOUND_VERSION=false
-          SECTION=""
+          # Use grep to extract the section and awk to format it
+          RELEASE_NOTES=$(awk '/^## \['"${NEW_VERSION}"'\]/ {p=1;print;next} /^## \[/ {p=0} p' CHANGELOG.md)
           
-          # Read CHANGELOG.md line by line
-          while IFS= read -r line; do
-            # Check for version header
-            if [[ $line =~ ^"## ["${NEW_VERSION}"]" ]]; then
-              FOUND_VERSION=true
-              continue
-            # Check for next version header to stop
-            elif [[ $FOUND_VERSION == true && $line =~ ^"## [" ]]; then
-              break
-            # Process section headers and content
-            elif [[ $FOUND_VERSION == true ]]; then
-              if [[ $line =~ ^"### " ]]; then
-                SECTION=${line}
-                echo "$SECTION" >> "$TEMP_NOTES"
-              elif [[ -n $line ]]; then
-                echo "$line" >> "$TEMP_NOTES"
-              fi
-            fi
-          done < "CHANGELOG.md"
-          
-          # Read the formatted release notes
-          if [ -s "$TEMP_NOTES" ]; then
-            RELEASE_NOTES=$(<"$TEMP_NOTES")
-          else
-            echo "Warning: No release notes found for version ${NEW_VERSION} in CHANGELOG.md"
+          if [ -z "$RELEASE_NOTES" ]; then
+            echo "Warning: No release notes found for version [${NEW_VERSION}] in CHANGELOG.md"
             RELEASE_NOTES="Release ${NEW_VERSION}"
+          else
+            echo "Successfully extracted release notes for version [${NEW_VERSION}]"
           fi
-          
-          # Clean up temporary file
-          rm "$TEMP_NOTES"
         else
-          echo "Warning: CHANGELOG.md not found"
+          echo "Warning: CHANGELOG.md file not found in $(pwd)"
           RELEASE_NOTES="Release ${NEW_VERSION}"
         fi
+        
+        # Debug: Print current directory contents
+        echo "Current directory contents:"
+        ls -la
         
         # Create and push tag if version changed
         if [ "$BUMP" != "none" ]; then
@@ -123,8 +101,10 @@ runs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # Create annotated tag with release notes
+          echo "Creating tag v${NEW_VERSION} with release notes"
           git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}" -m "${RELEASE_NOTES}"
           
           # Push the tag
+          echo "Pushing tag v${NEW_VERSION}"
           git push origin "v${NEW_VERSION}" --force
         fi
