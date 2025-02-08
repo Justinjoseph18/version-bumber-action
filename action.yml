@@ -1,5 +1,6 @@
 name: 'Automatic Version Bumper'
-description: 'Automatically bumps version and creates releases based on PR title conventions with changelog support'
+description: 'Automatically bumps version and creates releases based on PR title conventions'
+
 inputs:
   token:
     description: 'GitHub token for creating releases'
@@ -11,17 +12,12 @@ inputs:
     description: 'Force use of initial version'
     required: false
     default: 'false'
-  changelog_file:
-    description: 'Path to changelog file'
-    required: false
-    default: 'CHANGELOG.md'
+
 outputs:
   new_version:
     description: 'The new version number'
     value: ${{ steps.bump-version.outputs.version }}
-  has_release_notes:
-    description: 'Whether release notes were found'
-    value: ${{ steps.release-notes.outputs.has_notes }}
+
 runs:
   using: 'composite'
   steps:
@@ -29,185 +25,75 @@ runs:
       shell: bash
       id: initial-version
       run: |
-        INITIAL_VERSION="${{ inputs.initial_version }}"
-        echo "INITIAL_VERSION=${INITIAL_VERSION}" >> $GITHUB_ENV
+        echo "INITIAL_VERSION=${{ inputs.initial_version }}" >> $GITHUB_ENV
 
     - name: Determine version bump
       shell: bash
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
-        
-        # Enhanced conventional commits parsing
-        if [[ $PR_TITLE =~ ^(feat|fix|chore|docs|style|refactor|perf|test)(\([[:alnum:]-]+\))?!: ]]; then
+        if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
           echo "BUMP=major" >> $GITHUB_ENV
-        elif [[ $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
-          echo "BUMP=major" >> $GITHUB_ENV
-        elif [[ $PR_TITLE =~ ^feat(\([[:alnum:]-]+\))?: ]]; then
+        elif [[ $PR_TITLE =~ ^feat: ]]; then
           echo "BUMP=minor" >> $GITHUB_ENV
-        elif [[ $PR_TITLE =~ ^(fix|perf)(\([[:alnum:]-]+\))?: ]]; then
+        elif [[ $PR_TITLE =~ ^fix: ]]; then
           echo "BUMP=patch" >> $GITHUB_ENV
-        elif [[ $PR_TITLE =~ ^(chore|docs|style|refactor|test)(\([[:alnum:]-]+\))?: ]]; then
-          echo "BUMP=none" >> $GITHUB_ENV
         else
           echo "BUMP=none" >> $GITHUB_ENV
         fi
 
-    - name: Bump version
+    - name: Bump version and create tag
       shell: bash
       id: bump-version
       run: |
         CURRENT_VERSION="${{ inputs.initial_version }}"
-        
-        # Remove 'v' prefix if present
-        CURRENT_VERSION="${CURRENT_VERSION#v}"
-        
-        # Split version into components
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
         
-        # Perform version bump based on commit type
         case $BUMP in
-          major)
-            NEW_VERSION="$((MAJOR + 1)).0.0"
-            ;;
-          minor)
-            NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-            ;;
-          patch)
-            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-            ;;
-          none)
-            NEW_VERSION="${CURRENT_VERSION}"
-            ;;
+          major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+          minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+          patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          none) NEW_VERSION="${CURRENT_VERSION}" ;;
         esac
         
         echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-        echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
 
     - name: Extract Release Notes
       shell: bash
       id: release-notes
       run: |
-        extract_release_notes() {
-          local version=$1
-          local changelog_file=$2
-          
-          # Try exact version match first
-          local notes
-          notes=$(awk '
-            /^## \[?v?'"${version}"'\]?($|[[:space:]])/ {
-              flag=1;
-              next
-            }
-            /^## \[?v?[0-9]/ {
-              if (flag) {
-                flag=0
-              }
-            }
-            flag {
-              print
-            }
-          ' "$changelog_file")
-          
-          # If no notes found, try finding latest version section
-          if [ -z "$notes" ]; then
-            notes=$(awk '
-              /^## \[?v?[0-9]/ {
-                if (!found) {
-                  found=1;
-                  flag=1;
-                  next
-                }
-              }
-              /^## \[?v?[0-9]/ {
-                if (flag) {
-                  flag=0
-                }
-              }
-              flag {
-                print
-              }
-            ' "$changelog_file")
-          fi
-          
-          echo "$notes"
-        }
+        VERSION="v${{ steps.bump-version.outputs.version }}"
+        RELEASE_NOTES=$(awk -v version="$VERSION" '
+          BEGIN { flag=0 }
+          /^##[[:space:]]*v[0-9]+\.[0-9]+\.[0-9]+/ {
+            if (flag) exit;
+            if ($0 ~ version) { flag=1; next }
+          }
+          flag { print }
+        ' CHANGE_LOG.md)
 
-        format_release_notes() {
-          local notes="$1"
-          local version="$2"
-          
-          # Remove empty lines at start and end
-          notes="$(echo "$notes" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
-          
-          if [ -n "$notes" ]; then
-            {
-              echo "## v${version}"
-              echo
-              echo "$notes"
-            }
-          else
-            echo "No release notes found for version v${version}"
-          fi
-        }
+        # Ensure proper multi-line formatting
+        {
+          echo "RELEASE_NOTES<<EOF"
+          echo "## $VERSION"
+          echo ""
+          echo "$RELEASE_NOTES"
+          echo "EOF"
+        } >> $GITHUB_ENV
 
-        CHANGELOG_FILE="${{ inputs.changelog_file }}"
-        if [ -f "$CHANGELOG_FILE" ]; then
-          RELEASE_NOTES=$(extract_release_notes "${{ env.NEW_VERSION }}" "$CHANGELOG_FILE")
-          FORMATTED_NOTES=$(format_release_notes "$RELEASE_NOTES" "${{ env.NEW_VERSION }}")
+    - name: Commit and push tag
+      shell: bash
+      run: |
+        if [ "$BUMP" != "none" ]; then
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Set release notes to ENV with proper multi-line handling
-          {
-            echo "RELEASE_NOTES<<EOF"
-            echo "$FORMATTED_NOTES"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
-          
-          if [ -n "$RELEASE_NOTES" ]; then
-            echo "has_notes=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_notes=false" >> $GITHUB_OUTPUT
-          fi
-        else
-          echo "Warning: Changelog file not found at $CHANGELOG_FILE"
-          echo "has_notes=false" >> $GITHUB_OUTPUT
-          echo "RELEASE_NOTES=No changelog file found at $CHANGELOG_FILE" >> $GITHUB_ENV
+          TAG="v${{ steps.bump-version.outputs.version }}"
+
+          # Store the release notes in a file for tagging
+          echo -e "${{ env.RELEASE_NOTES }}" > RELEASE_NOTES.txt
+
+          # Ensure the tag message has proper markdown formatting
+          git tag -a "$TAG" -F RELEASE_NOTES.txt
+          git push origin "$TAG"
         fi
-
-    - name: Create Git Tag
-      shell: bash
-      if: env.BUMP != 'none'
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        TAG="v${{ env.NEW_VERSION }}"
-        
-        # Create temporary file for release notes
-        echo "${{ env.RELEASE_NOTES }}" > TEMP_RELEASE_NOTES.md
-        
-        # Create annotated tag with release notes
-        git tag -a "$TAG" -F TEMP_RELEASE_NOTES.md
-        
-        # Clean up temporary file
-        rm TEMP_RELEASE_NOTES.md
-        
-        # Push the tag
-        git push origin "$TAG" --force
-
-    - name: Create GitHub Release
-      if: env.BUMP != 'none'
-      shell: bash
-      run: |
-        # Create release using GitHub CLI or API
-        curl -X POST \
-          -H "Authorization: token ${{ inputs.token }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          "https://api.github.com/repos/${{ github.repository }}/releases" \
-          -d '{
-            "tag_name": "v'"${{ env.NEW_VERSION }}"'",
-            "name": "v'"${{ env.NEW_VERSION }}"'",
-            "body": "'"${RELEASE_NOTES//$'\n'/\\n}"'",
-            "draft": false,
-            "prerelease": false
-          }'
