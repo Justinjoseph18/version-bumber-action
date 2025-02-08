@@ -1,5 +1,6 @@
 name: 'Automatic Version Bumper'
-description: 'Automatically bumps version and creates releases based on PR title conventions'
+description: 'Automatically bumps version, extracts release notes, and creates releases based on PR title conventions'
+
 inputs:
   token:
     description: 'GitHub token for creating releases'
@@ -11,10 +12,15 @@ inputs:
     description: 'Force use of initial version'
     required: false
     default: 'false'
+
 outputs:
   new_version:
     description: 'The new version number'
     value: ${{ steps.bump-version.outputs.version }}
+  release_notes:
+    description: 'The extracted release notes'
+    value: ${{ steps.bump-version.outputs.release_notes }}
+
 runs:
   using: 'composite'
   steps:
@@ -30,81 +36,65 @@ runs:
       id: version-bump
       run: |
         PR_TITLE="${{ github.event.pull_request.title }}"
-        
-        # Default to "none" for non-PR events
-        BUMP="none"
-        
-        # Check PR title for version bump type
         if [[ $PR_TITLE =~ ^feat!: || $PR_TITLE =~ ^fix!: || $PR_TITLE =~ ^BREAKING[[:space:]]CHANGE ]]; then
-          BUMP="major"
+          echo "BUMP=major" >> $GITHUB_ENV
         elif [[ $PR_TITLE =~ ^feat: ]]; then
-          BUMP="minor"
+          echo "BUMP=minor" >> $GITHUB_ENV
         elif [[ $PR_TITLE =~ ^fix: ]]; then
-          BUMP="patch"
+          echo "BUMP=patch" >> $GITHUB_ENV
+        else
+          echo "BUMP=none" >> $GITHUB_ENV
         fi
-        
-        echo "BUMP=${BUMP}" >> $GITHUB_ENV
 
     - name: Bump version and create tag
       shell: bash
       id: bump-version
       run: |
         CURRENT_VERSION="${{ inputs.initial_version }}"
-        
-        # Split version into major, minor, patch
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
         
-        # Calculate new version based on bump type
         case $BUMP in
-          major)
-            NEW_VERSION="$((MAJOR + 1)).0.0"
-            ;;
-          minor)
-            NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-            ;;
-          patch)
-            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-            ;;
-          none)
-            NEW_VERSION="${CURRENT_VERSION}"
-            ;;
+          major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+          minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+          patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          none) NEW_VERSION="${CURRENT_VERSION}" ;;
         esac
         
-        # Output the new version
         echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
         
         # Extract release notes from CHANGELOG.md
         if [ -f "CHANGELOG.md" ]; then
-          echo "Found CHANGELOG.md file"
+          # Use awk to extract the section for the new version
+          RELEASE_NOTES=$(awk -v version="## [${NEW_VERSION}]" '
+            BEGIN { found=0; buffer="" }
+            $0 ~ version { found=1; next }
+            found && /^## / { exit }
+            found { buffer = buffer $0 "\n" }
+            END { print buffer }
+          ' CHANGELOG.md)
           
-          # Use grep to extract the section and awk to format it
-          RELEASE_NOTES=$(awk '/^## \['"${NEW_VERSION}"'\]/ {p=1;print;next} /^## \[/ {p=0} p' CHANGELOG.md)
+          # Escape newlines and special characters for GitHub Actions
+          RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
+          RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
+          RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
           
-          if [ -z "$RELEASE_NOTES" ]; then
-            echo "Warning: No release notes found for version [${NEW_VERSION}] in CHANGELOG.md"
-            RELEASE_NOTES="Release ${NEW_VERSION}"
-          else
-            echo "Successfully extracted release notes for version [${NEW_VERSION}]"
-          fi
+          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
         else
-          echo "Warning: CHANGELOG.md file not found in $(pwd)"
-          RELEASE_NOTES="Release ${NEW_VERSION}"
+          echo "release_notes=No CHANGELOG.md found" >> $GITHUB_OUTPUT
         fi
         
-        # Debug: Print current directory contents
-        echo "Current directory contents:"
-        ls -la
-        
-        # Create and push tag if version changed
         if [ "$BUMP" != "none" ]; then
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Create annotated tag with release notes
-          echo "Creating tag v${NEW_VERSION} with release notes"
-          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}" -m "${RELEASE_NOTES}"
+          # Create an annotated tag with release notes
+          if [ -n "$RELEASE_NOTES" ]; then
+            git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}" -m "$RELEASE_NOTES"
+          else
+            git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+          fi
           
-          # Push the tag
-          echo "Pushing tag v${NEW_VERSION}"
           git push origin "v${NEW_VERSION}" --force
         fi
