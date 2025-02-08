@@ -64,19 +64,17 @@ runs:
       id: release-notes
       run: |
         TAG="v${{ steps.bump-version.outputs.version }}"
+
+        # Extract release notes from CHANGE_LOG.md
         RELEASE_NOTES=$(awk '/^## '"$TAG"'/ {flag=1; next} /^## / {flag=0} flag' CHANGE_LOG.md)
 
-        # Ensure proper multi-line formatting
-        echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        echo "## $TAG" >> $GITHUB_ENV
-        echo "" >> $GITHUB_ENV
-        echo "$RELEASE_NOTES" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        # Ensure proper formatting
+        echo -e "## $TAG\n\n$RELEASE_NOTES" > RELEASE_NOTES.txt
 
-        # Store in a file for release
-        echo "## $TAG" > RELEASE_NOTES.txt
-        echo "" >> RELEASE_NOTES.txt
-        echo "$RELEASE_NOTES" >> RELEASE_NOTES.txt
+        # Store it as an environment variable for later use
+        echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+        echo -e "## $TAG\n\n$RELEASE_NOTES" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
 
     - name: Commit and push tag
       shell: bash
@@ -93,19 +91,12 @@ runs:
         fi
 
     - name: Create GitHub Release
-      shell: bash
-      run: |
-        if [ "$BUMP" != "none" ]; then
-          TAG="v${{ steps.bump-version.outputs.version }}"
-
-          # Authenticate GitHub CLI
-          echo "${{ inputs.token }}" | gh auth login --with-token
-
-          # Create release using extracted notes
-          gh release create "$TAG" RELEASE_NOTES.txt \
-            --title "$TAG" \
-            --notes-file RELEASE_NOTES.txt \
-            --repo "$GITHUB_REPOSITORY"
-
-          echo "GitHub Release created for $TAG"
-        fi
+      uses: actions/create-release@v1
+      with:
+        tag_name: v${{ steps.bump-version.outputs.version }}
+        release_name: v${{ steps.bump-version.outputs.version }}
+        body: ${{ env.RELEASE_NOTES }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
