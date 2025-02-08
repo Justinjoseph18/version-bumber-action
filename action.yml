@@ -4,10 +4,6 @@ inputs:
   token:
     description: 'GitHub token for creating releases'
     required: true
-  changelog_file:
-    description: 'Path to the CHANGELOG file'
-    required: false
-    default: 'CHANGELOG.md'
   initial_version:
     description: 'Initial version from secrets'
     required: true
@@ -15,6 +11,10 @@ inputs:
     description: 'Force use of initial version'
     required: false
     default: 'false'
+  changelog_path:
+    description: 'Path to CHANGELOG.md file'
+    required: false
+    default: 'CHANGELOG.md'
 outputs:
   new_version:
     description: 'The new version number'
@@ -44,7 +44,44 @@ runs:
           echo "BUMP=none" >> $GITHUB_ENV
         fi
 
-    - name: Bump version
+    - name: Extract release notes
+      shell: bash
+      id: extract-notes
+      run: |
+        CHANGELOG_PATH="${{ inputs.changelog_path }}"
+        if [ ! -f "$CHANGELOG_PATH" ]; then
+          echo "WARNING: Changelog file not found at $CHANGELOG_PATH"
+          echo "release_notes=No changelog entry found." >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        # Function to extract version block from changelog
+        extract_version_block() {
+          local version=$1
+          local in_block=false
+          local block=""
+          
+          while IFS= read -r line; do
+            if [[ $line =~ ^##[[:space:]]*\[?${version}\]? ]]; then
+              in_block=true
+              continue
+            elif [[ $in_block == true && $line =~ ^##[[:space:]] ]]; then
+              break
+            elif [[ $in_block == true ]]; then
+              block="${block}${line}\n"
+            fi
+          done < "$CHANGELOG_PATH"
+          
+          echo -e "$block" | sed '/^$/d'
+        }
+
+        # Set as environment variable for use in next step
+        RELEASE_NOTES=$(extract_version_block "$NEW_VERSION")
+        echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+        echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Bump version and create tag
       shell: bash
       id: bump-version
       run: |
@@ -59,60 +96,13 @@ runs:
         esac
         
         echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-
-    - name: Extract Release Notes
-      shell: bash
-      id: extract-notes
-      run: |
-        VERSION="v${{ steps.bump-version.outputs.version }}"
-        CHANGELOG_FILE="${{ inputs.changelog_file }}"
         
-        if [ ! -f "$CHANGELOG_FILE" ]; then
-          echo "Error: Changelog file not found at $CHANGELOG_FILE"
-          exit 1
+        if [ "$BUMP" != "none" ]; then
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create tag with release notes
+          RELEASE_NOTES="${{ steps.extract-notes.outputs.release_notes }}"
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}" -m "$RELEASE_NOTES"
+          git push origin "v${NEW_VERSION}" --force
         fi
-
-        # Find the start of the current version's notes
-        START_LINE=$(grep -n "^## $VERSION" "$CHANGELOG_FILE" | cut -d ':' -f 1)
-        
-        if [ -z "$START_LINE" ]; then
-          echo "Error: Could not find release notes for version $VERSION"
-          exit 1
-        fi
-
-        # Find the next version header or EOF
-        NEXT_VERSION_LINE=$(tail -n +$((START_LINE + 1)) "$CHANGELOG_FILE" | grep -n "^## " | head -1 | cut -d ':' -f 1)
-        
-        if [ -n "$NEXT_VERSION_LINE" ]; then
-          # If there's a next version, extract until that line
-          RELEASE_NOTES=$(tail -n +$((START_LINE + 1)) "$CHANGELOG_FILE" | head -n $((NEXT_VERSION_LINE - 1)))
-        else
-          # If this is the latest version, extract until the end
-          RELEASE_NOTES=$(tail -n +$((START_LINE + 1)) "$CHANGELOG_FILE"))
-        fi
-
-        # Clean up the notes
-        CLEAN_NOTES=$(echo "$RELEASE_NOTES" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
-        
-        # Create multiline output
-        {
-          echo "notes<<EOF"
-          echo "$CLEAN_NOTES"
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
-
-    - name: Create Release
-      if: env.BUMP != 'none'
-      shell: bash
-      run: |
-        TAG="v${{ steps.bump-version.outputs.version }}"
-        
-        # Create the release using GitHub CLI
-        gh release create "$TAG" \
-          --title "$TAG" \
-          --notes "${{ steps.extract-notes.outputs.notes }}" \
-          --draft=false \
-          --prerelease=false
-      env:
-        GITHUB_TOKEN: ${{ inputs.token }}
-        GH_TOKEN: ${{ inputs.token }}
